@@ -218,7 +218,11 @@ def set_action_button_capitalization(button: QAbstractButton) -> None:
 def _logo_pixmap(size: QSize, dpr: float) -> QPixmap | None:
     global _logo_source
     if _logo_source is None:
-        _logo_source = QPixmap(str(resource_path("assets", "app_icon_source.png")))
+        # Пиксельная версия маскота — для логотипов в интерфейсе; качественный
+        # мастер остаётся источником ярлыка и крупных размеров иконки.
+        _logo_source = QPixmap(str(resource_path("assets", "app_logo_pixel.png")))
+        if _logo_source.isNull():
+            _logo_source = QPixmap(str(resource_path("assets", "app_icon_source.png")))
     if _logo_source.isNull():
         return None
 
