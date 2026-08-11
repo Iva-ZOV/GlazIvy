@@ -159,7 +159,7 @@ class CameraTile(QWidget):
         self.video = VideoCanvas(self)
         self.video.setMinimumSize(0, 0)
         self.video.unsetCursor()
-        self.video.set_corner_radius(8.0)
+        self.video.set_corner_radius(4.0)
         self._root_layout.addWidget(self.video, 1)
 
         self._status_effect = QGraphicsOpacityEffect(self.status)
@@ -579,7 +579,7 @@ class CameraTile(QWidget):
         self._expanded = expanded
         margin = 0 if expanded else 1
         self._root_layout.setContentsMargins(margin, margin, margin, margin)
-        self.video.set_corner_radius(0.0 if expanded else 8.0)
+        self.video.set_corner_radius(0.0 if expanded else 4.0)
         if expanded:
             self._set_highlight_visible(False)
         elif self._header_target_visible:
@@ -736,7 +736,7 @@ class CameraTile(QWidget):
         border.setAlpha(82)
         painter.setPen(QPen(border, 1))
         painter.setBrush(QColor(SURFACE_RAISED))
-        radius = 0.0 if self._expanded else 8.0
+        radius = 0.0 if self._expanded else 4.0
         painter.drawRoundedRect(rect, radius, radius)
 
         if self._highlight_opacity > 0.01 and not self._expanded:
@@ -746,8 +746,8 @@ class CameraTile(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(
                 QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75),
-                7.5,
-                7.5,
+                3.5,
+                3.5,
             )
 
         # Ненавязчивый маркер правого нижнего угла подсказывает про ресайз.

@@ -1,28 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#202936"/>
-      <stop offset="0.52" stop-color="#111821"/>
-      <stop offset="1" stop-color="#080d13"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5ba9ff"/>
-      <stop offset="1" stop-color="#54d6c3"/>
-    </linearGradient>
-    <radialGradient id="lens" cx="38%" cy="32%" r="75%">
-      <stop offset="0" stop-color="#baf7ff"/>
-      <stop offset="0.25" stop-color="#4faed2"/>
-      <stop offset="0.58" stop-color="#173e58"/>
-      <stop offset="1" stop-color="#07121b"/>
-    </radialGradient>
-  </defs>
-  <rect x="28" y="28" width="968" height="968" rx="232" fill="url(#bg)" stroke="#ffffff" stroke-opacity=".08" stroke-width="16"/>
-  <circle cx="512" cy="512" r="326" fill="#54d6c3" fill-opacity=".035" stroke="url(#accent)" stroke-opacity=".30" stroke-width="20"/>
-  <rect x="242" y="308" width="540" height="408" rx="128" fill="#0b1119" stroke="url(#accent)" stroke-width="30"/>
-  <path d="M318 308l54-72h280l54 72" fill="#111a24" stroke="url(#accent)" stroke-width="25" stroke-linejoin="round"/>
-  <circle cx="512" cy="512" r="150" fill="#071018" stroke="#91e8dd" stroke-opacity=".42" stroke-width="22"/>
-  <circle cx="512" cy="512" r="112" fill="url(#lens)"/>
-  <circle cx="468" cy="466" r="29" fill="#e8ffff" fill-opacity=".88"/>
-  <circle cx="694" cy="388" r="20" fill="#55d697"/>
-</svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Кот-дозорный с биноклем</title>
+  <desc id="desc">Дружелюбный серый кот анфас, в пилотке с красной звездой и с двумя объективами бинокля.</desc>
 
+  <!-- Плоские массы и тяжёлый графитовый контур рассчитаны на 16 px. -->
+  <g stroke="#1B1C18" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Голова и острые уши образуют один узнаваемый силуэт. -->
+    <path fill="#A3A59A" d="M91 219 61 91q-3-18 14-8l86 45q42-24 95-24t95 24l86-45q17-10 14 8l-30 128q25 45 7 105-17 58-70 91-43 27-92 27t-92-27q-53-33-70-91-18-60 7-105Z"/>
+    <path fill="#D5BE8D" d="m89 122 57 31-43 50Z" stroke-width="12"/>
+    <path fill="#D5BE8D" d="m423 122-57 31 43 50Z" stroke-width="12"/>
+
+    <!-- Пилотка: низкий ромбовидный верх и отворот, как у варианта №8. -->
+    <path fill="#6E7A45" d="M137 169q20-88 119-105 99 17 119 105l-38 42q-81-28-162 0Z"/>
+    <path d="m151 158 105-65 105 65" fill="none" stroke="#4F5932" stroke-width="13"/>
+    <path d="M143 169q113 40 226 0" fill="none" stroke="#C0322B" stroke-width="8"/>
+
+    <!-- Большая звезда остаётся знакомой даже после сведения в точку на 16 px. -->
+    <path fill="#C0322B" stroke-width="9" d="m256 103 13 26 29 4-21 20 5 29-26-14-26 14 5-29-21-20 29-4Z"/>
+
+    <!-- Глаза максимально крупные, с кремовой белизной и простыми зрачками. -->
+    <circle cx="180" cy="278" r="55" fill="#E6D6AE"/>
+    <circle cx="332" cy="278" r="55" fill="#E6D6AE"/>
+    <ellipse cx="187" cy="285" rx="20" ry="29" fill="#1B1C18" stroke="none"/>
+    <ellipse cx="325" cy="285" rx="20" ry="29" fill="#1B1C18" stroke="none"/>
+    <circle cx="176" cy="271" r="10" fill="#F8EDCF" stroke="none"/>
+    <circle cx="314" cy="271" r="10" fill="#F8EDCF" stroke="none"/>
+
+    <!-- Три коротких штриха вместо реалистичной табби-фактуры. -->
+    <path d="m223 211-8 17m41-20v18m33-15 8 17" fill="none" stroke-width="9"/>
+
+    <!-- Кремовая мордочка и маленькая улыбка поддерживают дружелюбность. -->
+    <path fill="#D5BE8D" stroke-width="10" d="M199 341q0-42 57-23 57-19 57 23 0 43-57 47-57-4-57-47Z"/>
+    <path fill="#C07858" stroke-width="9" d="m256 329 16 9-16 13-16-13Z"/>
+    <path d="M256 351q-5 21-29 14m29-14q5 21 29 14" fill="none" stroke-width="8"/>
+    <path d="m115 332 42 10m-45 17 43-2m242-25-42 10m45 17-43-2" fill="none" stroke-width="7"/>
+
+    <!-- Бинокль: мост и два самостоятельных высококонтрастных объектива. -->
+    <path fill="#303228" d="M211 369q45-22 90 0l9 49H202Z"/>
+    <path fill="#596240" stroke-width="14" d="m125 402 17-53q41-28 78 8l8 49Z"/>
+    <path fill="#596240" stroke-width="14" d="m387 402-17-53q-41-28-78 8l-8 49Z"/>
+    <circle cx="178" cy="408" r="64" fill="#596240"/>
+    <circle cx="334" cy="408" r="64" fill="#596240"/>
+    <circle cx="178" cy="408" r="40" fill="#151713" stroke="#D5BE8D" stroke-width="12"/>
+    <circle cx="334" cy="408" r="40" fill="#151713" stroke="#D5BE8D" stroke-width="12"/>
+    <circle cx="162" cy="392" r="9" fill="#E6D6AE" stroke="none"/>
+    <circle cx="318" cy="392" r="9" fill="#E6D6AE" stroke="none"/>
+  </g>
+</svg>

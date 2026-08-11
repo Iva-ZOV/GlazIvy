@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -33,11 +32,11 @@ from ..constants import APP_NAME
 from .camera_tile import CameraTile
 from .theme import BACKGROUND, BRONZE, KHAKI, TEXT, TEXT_MUTED
 from .widgets import (
+    HeaderActionButton,
     LogoGlyph,
     SegmentedControl,
     ToolIconButton,
     draw_grain,
-    set_action_button_capitalization,
     set_heading_capitalization,
 )
 
@@ -124,12 +123,13 @@ class BoardTitleBar(QWidget):
         center.addWidget(self.camera_count, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.layout_control = SegmentedControl(
-            ("Свободно", "Сетка"),
+            ("", ""),
             ("free", "grid"),
             layout_mode,
             self,
+            icons=("free", "grid"),
+            segment_tooltips=("Свободная раскладка", "Раскладка сеткой"),
         )
-        self.layout_control.setToolTip("Режим раскладки камер")
         self.layout_control.value_changed.connect(self.layout_mode_changed)
         center.addWidget(self.layout_control, 0, Qt.AlignmentFlag.AlignHCenter)
         self.center_block.setFixedWidth(self.layout_control.sizeHint().width())
@@ -149,21 +149,29 @@ class BoardTitleBar(QWidget):
         self._action_pair = QWidget(self._right_group)
         pair = QHBoxLayout(self._action_pair)
         pair.setContentsMargins(0, 0, 0, 0)
-        pair.setSpacing(1)
+        pair.setSpacing(0)
 
-        self.find_button = QPushButton("Найти камеры", self)
+        self.find_button = HeaderActionButton(
+            "Найти камеры",
+            "search",
+            primary=False,
+            outer_side="left",
+            parent=self._action_pair,
+        )
         self.find_button.setObjectName("findCameraButton")
-        self.find_button.setFixedHeight(36)
-        self.find_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_action_button_capitalization(self.find_button)
+        self.find_button.setToolTip("Найти камеры")
         self.find_button.clicked.connect(self.find_cameras_clicked)
         pair.addWidget(self.find_button)
 
-        self.add_button = QPushButton("＋  Добавить камеру", self)
+        self.add_button = HeaderActionButton(
+            "Добавить камеру",
+            "add",
+            primary=True,
+            outer_side="right",
+            parent=self._action_pair,
+        )
         self.add_button.setObjectName("addCameraButton")
-        self.add_button.setFixedHeight(36)
-        self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        set_action_button_capitalization(self.add_button)
+        self.add_button.setToolTip("Добавить камеру")
         self.add_button.clicked.connect(self.add_camera_clicked)
         pair.addWidget(self.add_button)
         right.addWidget(self._action_pair)
@@ -226,10 +234,6 @@ class BoardTitleBar(QWidget):
             self._left_layout.removeWidget(self._action_pair)
             self._right_layout.insertWidget(0, self._action_pair)
             self.title.show()
-        for button in (self.find_button, self.add_button):
-            button.setProperty("compact", compact)
-            button.style().unpolish(button)
-            button.style().polish(button)
         tool_size = 30 if compact else 34
         for button in (
             self.settings_button,
@@ -238,6 +242,8 @@ class BoardTitleBar(QWidget):
             self.close_button,
         ):
             button.setFixedSize(tool_size, tool_size)
+        for button in (self.find_button, self.add_button):
+            button.set_compact(compact)
         self._sync_action_buttons()
         self._sync_side_columns()
 
@@ -261,9 +267,11 @@ class BoardTitleBar(QWidget):
     def _sync_action_buttons(self) -> None:
         if self._discovery_busy:
             self.find_button.setText("Ищем…")
+            self.find_button.setToolTip("Идёт поиск камер…")
         else:
             self.find_button.setText("Найти камеры")
-        self.add_button.setText("＋  Камеру" if self._compact else "＋  Добавить камеру")
+            self.find_button.setToolTip("Найти камеры")
+        self.add_button.setText("Добавить камеру")
 
     def _sync_side_columns(self) -> None:
         self._left_group.ensurePolished()
@@ -328,7 +336,7 @@ class CameraBoard(QWidget):
         self._layout_mode = layout_mode
         self._expanded_camera_id: str | None = None
         self._last_raise_snapshot: tuple[str, tuple[str, ...], float] | None = None
-        self._corner_radius = 10.0
+        self._corner_radius = 6.0
         self._fullscreen_reference_size: QSize | None = None
         self.setObjectName("cameraBoard")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)

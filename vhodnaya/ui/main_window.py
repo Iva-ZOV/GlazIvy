@@ -654,7 +654,7 @@ class MainWindow(QWidget):
         self.surface.setProperty("flat", flat)
         self.surface.style().unpolish(self.surface)
         self.surface.style().polish(self.surface)
-        self.board.set_corner_radius(0.0 if flat else 10.0)
+        self.board.set_corner_radius(0.0 if flat else 6.0)
         self.title_bar.set_fullscreen_mode(self.isFullScreen())
         if self.isFullScreen():
             self.title_bar.show()
@@ -690,7 +690,7 @@ class MainWindow(QWidget):
         ):
             painter.setBrush(QColor(0, 0, 0, alpha))
             rect = shadow_rect.adjusted(-spread, -spread, spread, spread)
-            radius = 10.0 + spread
+            radius = 6.0 + spread
             painter.drawRoundedRect(rect, radius, radius)
 
     def resizeEvent(self, event: QResizeEvent) -> None:

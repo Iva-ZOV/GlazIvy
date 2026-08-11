@@ -6,6 +6,7 @@ import math
 from datetime import datetime
 
 from PySide6.QtCore import (
+    QEvent,
     Property,
     QEasingCurve,
     QPointF,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QSpacerItem,
+    QToolTip,
     QWidget,
 )
 
@@ -45,6 +47,7 @@ from .theme import (
     DANGER,
     KHAKI,
     PRIMARY,
+    PRIMARY_HOVER,
     PRIMARY_PRESSED,
     SUCCESS,
     SURFACE,
@@ -59,6 +62,135 @@ def _color(value: str, alpha: int | None = None) -> QColor:
     if alpha is not None:
         color.setAlpha(alpha)
     return color
+
+
+def _blend_color(first: str, second: str, amount: float) -> QColor:
+    """Смешивает два фирменных цвета без промежуточных CSS-артефактов."""
+
+    start = QColor(first)
+    end = QColor(second)
+    t = min(1.0, max(0.0, amount))
+    return QColor(
+        round(start.red() + (end.red() - start.red()) * t),
+        round(start.green() + (end.green() - start.green()) * t),
+        round(start.blue() + (end.blue() - start.blue()) * t),
+        round(start.alpha() + (end.alpha() - start.alpha()) * t),
+    )
+
+
+def _segment_path(
+    rect: QRectF,
+    radius: float,
+    *,
+    round_left: bool,
+    round_right: bool,
+) -> QPainterPath:
+    """Прямоугольник с выборочными внешними углами для составных кнопок."""
+
+    radius = min(radius, rect.width() / 2, rect.height() / 2)
+    left_radius = radius if round_left else 0.0
+    right_radius = radius if round_right else 0.0
+    path = QPainterPath()
+    path.moveTo(rect.left() + left_radius, rect.top())
+    path.lineTo(rect.right() - right_radius, rect.top())
+    if round_right:
+        path.quadTo(rect.right(), rect.top(), rect.right(), rect.top() + radius)
+    else:
+        path.lineTo(rect.right(), rect.top())
+    path.lineTo(rect.right(), rect.bottom() - right_radius)
+    if round_right:
+        path.quadTo(rect.right(), rect.bottom(), rect.right() - radius, rect.bottom())
+    else:
+        path.lineTo(rect.right(), rect.bottom())
+    path.lineTo(rect.left() + left_radius, rect.bottom())
+    if round_left:
+        path.quadTo(rect.left(), rect.bottom(), rect.left(), rect.bottom() - radius)
+    else:
+        path.lineTo(rect.left(), rect.bottom())
+    path.lineTo(rect.left(), rect.top() + left_radius)
+    if round_left:
+        path.quadTo(rect.left(), rect.top(), rect.left() + radius, rect.top())
+    else:
+        path.lineTo(rect.left(), rect.top())
+    path.closeSubpath()
+    return path
+
+
+def _draw_header_action_icon(
+    painter: QPainter,
+    kind: str,
+    rect: QRectF,
+    color: QColor,
+) -> None:
+    """Рисует 18-px глифы поиска и добавления чистыми QPainter-примитивами."""
+
+    painter.save()
+    painter.setPen(
+        QPen(
+            color,
+            1.65,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+    )
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    center = rect.center()
+    if kind == "search":
+        lens = QPointF(center.x() - 1.5, center.y() - 1.5)
+        painter.drawEllipse(lens, 4.4, 4.4)
+        painter.drawLine(
+            QPointF(lens.x() + 3.2, lens.y() + 3.2),
+            QPointF(center.x() + 6.1, center.y() + 6.1),
+        )
+    elif kind == "add":
+        painter.drawRoundedRect(
+            QRectF(center.x() - 6.5, center.y() - 6.5, 13.0, 13.0),
+            1.4,
+            1.4,
+        )
+        painter.drawLine(
+            QPointF(center.x() - 3.2, center.y()),
+            QPointF(center.x() + 3.2, center.y()),
+        )
+        painter.drawLine(
+            QPointF(center.x(), center.y() - 3.2),
+            QPointF(center.x(), center.y() + 3.2),
+        )
+    painter.restore()
+
+
+def _draw_layout_icon(
+    painter: QPainter,
+    kind: str,
+    rect: QRectF,
+    color: QColor,
+) -> None:
+    """Рисует свободную раскладку или сетку в поле 18×18 px."""
+
+    painter.save()
+    painter.setPen(
+        QPen(
+            color,
+            1.35,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.SquareCap,
+            Qt.PenJoinStyle.MiterJoin,
+        )
+    )
+    wash = QColor(color)
+    wash.setAlpha(38)
+    painter.setBrush(wash)
+    cx, cy = rect.center().x(), rect.center().y()
+    if kind == "free":
+        painter.drawRect(QRectF(cx - 7.5, cy - 6.5, 9.0, 6.0))
+        painter.drawRect(QRectF(cx - 1.0, cy - 2.0, 8.5, 6.0))
+        painter.drawRect(QRectF(cx - 6.0, cy + 2.0, 7.5, 5.0))
+    elif kind == "grid":
+        for x in (cx - 6.5, cx + 1.0):
+            for y in (cy - 6.5, cy + 1.0):
+                painter.drawRect(QRectF(x, y, 5.5, 5.5))
+    painter.restore()
 
 
 _logo_source: QPixmap | None = None
@@ -158,7 +290,7 @@ class GrainFrame(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
-        radius = 0.0 if self.property("flat") else 10.0
+        radius = 0.0 if self.property("flat") else 6.0
         if radius > 0.0:
             clip = QPainterPath()
             clip.setFillRule(Qt.FillRule.WindingFill)
@@ -271,7 +403,7 @@ class ToolIconButton(QAbstractButton):
                 background = _color(BRONZE, 42)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(background)
-        painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 6, 6)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 3, 3)
 
         glyph = _color(BRONZE, int(185 + 65 * self._hover))
         if self.kind == "close" and self._hover > 0.01:
@@ -308,6 +440,153 @@ class ToolIconButton(QAbstractButton):
             painter.drawLine(QPointF(cx - 2, cy), QPointF(cx + 4, cy + 5))
 
 
+class HeaderActionButton(QAbstractButton):
+    """Одна половина составной кнопки поиска/добавления в оконной панели."""
+
+    def __init__(
+        self,
+        text: str,
+        kind: str,
+        *,
+        primary: bool,
+        outer_side: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        if kind not in {"search", "add"}:
+            raise ValueError("Неизвестная иконка кнопки панели")
+        if outer_side not in {"left", "right"}:
+            raise ValueError("outer_side должен быть left или right")
+        self.kind = kind
+        self.primary = primary
+        self.outer_side = outer_side
+        self._compact = False
+        self._hover = 0.0
+        self.setText(text)
+        self.setFixedHeight(36)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        font = QFont(self.font())
+        font.setCapitalization(QFont.Capitalization.AllUppercase)
+        self.setFont(font)
+        self._animation = QVariantAnimation(self)
+        self._animation.setDuration(140)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._set_hover)
+
+    def sizeHint(self) -> QSize:
+        if self._compact:
+            return QSize(42, 36)
+        return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 53, 36)
+
+    def set_compact(self, compact: bool) -> None:
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self.setProperty("compact", compact)
+        self.updateGeometry()
+        self.update()
+
+    def _set_hover(self, value: object) -> None:
+        self._hover = float(value)
+        self.update()
+
+    def _animate_to(self, end: float) -> None:
+        self._animation.stop()
+        self._animation.setStartValue(self._hover)
+        self._animation.setEndValue(end)
+        self._animation.start()
+
+    def enterEvent(self, event: object) -> None:
+        self._animate_to(1.0)
+        super().enterEvent(event)  # type: ignore[arg-type]
+
+    def leaveEvent(self, event: object) -> None:
+        self._animate_to(0.0)
+        super().leaveEvent(event)  # type: ignore[arg-type]
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        shape = _segment_path(
+            rect,
+            3.0,
+            round_left=self.outer_side == "left",
+            round_right=self.outer_side == "right",
+        )
+
+        if not self.isEnabled():
+            if self.primary:
+                background = _color(PRIMARY_PRESSED, 58)
+                border = _color(BRONZE, 18)
+            else:
+                background = _color(BRONZE, 0)
+                border = _color(BRONZE, 36)
+            glyph = _color(BRONZE, 92)
+        elif self.primary:
+            background = (
+                _color(PRIMARY_PRESSED, 244)
+                if self.isDown()
+                else _blend_color(PRIMARY, PRIMARY_HOVER, self._hover)
+            )
+            border = _color(TEXT, int(24 + 28 * self._hover))
+            glyph = _color(TEXT, 250)
+        else:
+            background = _color(BRONZE, int(5 + 22 * self._hover))
+            if self.isDown():
+                background = _color(BRONZE, 38)
+            border = _color(BRONZE, int(145 + 45 * self._hover))
+            glyph = _blend_color(BRONZE, TEXT, self._hover)
+
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(background)
+        painter.drawPath(shape)
+
+        font = QFont(self.font())
+        font.setPixelSize(11 if self._compact else 12)
+        font.setWeight(QFont.Weight.Bold if self.primary else QFont.Weight.DemiBold)
+        font.setCapitalization(QFont.Capitalization.AllUppercase)
+        painter.setFont(font)
+        if self._compact:
+            icon_rect = QRectF(
+                (self.width() - 18) / 2,
+                (self.height() - 18) / 2,
+                18,
+                18,
+            )
+        else:
+            text_width = painter.fontMetrics().horizontalAdvance(self.text())
+            content_width = 18 + 8 + text_width
+            content_left = (self.width() - content_width) / 2
+            icon_rect = QRectF(content_left, (self.height() - 18) / 2, 18, 18)
+            painter.setPen(glyph)
+            painter.drawText(
+                QRectF(
+                    content_left + 26,
+                    0,
+                    text_width + 2,
+                    self.height(),
+                ),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                self.text(),
+            )
+        _draw_header_action_icon(painter, self.kind, icon_rect, glyph)
+
+        if self.hasFocus():
+            painter.setPen(QPen(_color(KHAKI, 220), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(
+                _segment_path(
+                    rect.adjusted(2, 2, -2, -2),
+                    2.0,
+                    round_left=self.outer_side == "left",
+                    round_right=self.outer_side == "right",
+                )
+            )
+
+
 class SegmentedControl(QWidget):
     value_changed = Signal(str)
 
@@ -317,12 +596,21 @@ class SegmentedControl(QWidget):
         values: tuple[str, ...],
         value: str,
         parent: QWidget | None = None,
+        *,
+        icons: tuple[str | None, ...] | None = None,
+        segment_tooltips: tuple[str, ...] | None = None,
     ) -> None:
         super().__init__(parent)
         if len(labels) != len(values) or not labels:
             raise ValueError("labels и values должны быть непустыми и одинаковыми")
         self.labels = labels
         self.values = values
+        self.icons = icons or tuple(None for _ in labels)
+        self.segment_tooltips = segment_tooltips
+        if len(self.icons) != len(labels):
+            raise ValueError("icons и labels должны быть одинаковой длины")
+        if segment_tooltips is not None and len(segment_tooltips) != len(labels):
+            raise ValueError("segment_tooltips и labels должны быть одинаковой длины")
         self._index = values.index(value) if value in values else 0
         self._position = float(self._index)
         self._animation = QVariantAnimation(self)
@@ -330,17 +618,38 @@ class SegmentedControl(QWidget):
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._animation.valueChanged.connect(self._set_position)
         self.setFixedHeight(32)
-        self.setMinimumWidth(82 if len(labels) == 2 else 112)
+        self.setMinimumWidth(self.sizeHint().width())
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
         font = QFont(self.font())
         font.setCapitalization(QFont.Capitalization.AllUppercase)
         self.setFont(font)
 
     def sizeHint(self) -> QSize:
+        if any(self.icons):
+            return QSize(38 * len(self.labels), 32)
         widths = [self.fontMetrics().horizontalAdvance(label) + 24 for label in self.labels]
         return QSize(sum(widths), 32)
+
+    def event(self, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.ToolTip
+            and self.segment_tooltips is not None
+        ):
+            position = event.pos()  # type: ignore[attr-defined]
+            index = min(
+                len(self.values) - 1,
+                max(0, int(position.x() / max(1, self.width()) * len(self.values))),
+            )
+            QToolTip.showText(
+                event.globalPos(),  # type: ignore[attr-defined]
+                self.segment_tooltips[index],
+                self,
+            )
+            return True
+        return super().event(event)
 
     def value(self) -> str:
         return self.values[self._index]
@@ -406,7 +715,7 @@ class SegmentedControl(QWidget):
         outer = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         painter.setPen(QPen(_color(BRONZE, 70), 1))
         painter.setBrush(_color(BACKGROUND, 185))
-        painter.drawRoundedRect(outer, 6, 6)
+        painter.drawRoundedRect(outer, 3, 3)
 
         segment_width = outer.width() / len(self.values)
         slider = QRectF(
@@ -420,13 +729,13 @@ class SegmentedControl(QWidget):
         gradient.setColorAt(1.0, _color(PRIMARY_PRESSED, 242))
         painter.setPen(QPen(_color(BRONZE, 82), 1))
         painter.setBrush(gradient)
-        painter.drawRoundedRect(slider, 5, 5)
+        painter.drawRoundedRect(slider, 2, 2)
 
         font = QFont(self.font())
         font.setPixelSize(11)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
-        for index, label in enumerate(self.labels):
+        for index, (label, icon) in enumerate(zip(self.labels, self.icons)):
             rect = QRectF(
                 outer.left() + index * segment_width,
                 outer.top(),
@@ -434,16 +743,19 @@ class SegmentedControl(QWidget):
                 outer.height(),
             )
             distance = abs(self._position - index)
-            if distance < 0.5:
-                painter.setPen(_color(TEXT, 248))
+            glyph = _color(TEXT, 248) if distance < 0.5 else _color(BRONZE, 215)
+            if icon is not None:
+                icon_rect = QRectF(0, 0, 18, 18)
+                icon_rect.moveCenter(rect.center())
+                _draw_layout_icon(painter, icon, icon_rect, glyph)
             else:
-                painter.setPen(_color(BRONZE, 205))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+                painter.setPen(glyph)
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
         if self.hasFocus():
             painter.setPen(QPen(_color(KHAKI, 205), 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(outer.adjusted(1, 1, -1, -1), 5, 5)
+            painter.drawRoundedRect(outer.adjusted(1, 1, -1, -1), 2, 2)
 
 
 class StatusPill(QWidget):
@@ -539,7 +851,7 @@ class VideoCanvas(QWidget):
         self._overlay_opacity = 1.0
         self._state = "connecting"
         self._detail = "Подключение к камере…"
-        self._corner_radius = 8.0
+        self._corner_radius = 4.0
 
         self._frame_animation = QVariantAnimation(self)
         self._frame_animation.setDuration(360)
@@ -617,8 +929,8 @@ class VideoCanvas(QWidget):
         painter.setBrush(_color(BRONZE, 12))
         painter.drawRoundedRect(
             QRectF(center.x() - 29, center.y() - 22, 58, 44),
-            6,
-            6,
+            3,
+            3,
         )
         painter.setBrush(_color(KHAKI, 52))
         painter.drawEllipse(center, 12, 12)
@@ -677,7 +989,7 @@ class VideoCanvas(QWidget):
 
         painter.setPen(QPen(_color(BRONZE, 76), 1))
         painter.setBrush(_color(SURFACE, 238))
-        painter.drawRoundedRect(card, 6, 6)
+        painter.drawRoundedRect(card, 3, 3)
 
         title_font = QFont(self.font())
         title_font.setPixelSize(14)

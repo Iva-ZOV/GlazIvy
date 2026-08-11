@@ -35,7 +35,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     QFrame#dialogSurface {{
         background-color: {SURFACE};
         border: 1px solid rgba(184, 155, 106, 48);
-        border-radius: 10px;
+        border-radius: 6px;
     }}
 
     QFrame#windowSurface[flat="true"] {{
@@ -51,7 +51,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     QWidget#cameraTileHeader {{
         background-color: rgba(17, 18, 15, 240);
         border: 1px solid rgba(184, 155, 106, 82);
-        border-radius: 6px;
+        border-radius: 4px;
     }}
 
     QLabel#appTitle {{
@@ -103,7 +103,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: #E7A29A;
         background-color: rgba(192, 50, 43, 24);
         border: 1px solid rgba(192, 50, 43, 92);
-        border-radius: 6px;
+        border-radius: 3px;
         padding: 9px 11px;
     }}
 
@@ -121,7 +121,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: {TEXT};
         background-color: {SURFACE_RAISED};
         border: 1px solid rgba(184, 155, 106, 48);
-        border-radius: 6px;
+        border-radius: 3px;
         selection-color: {TEXT};
         selection-background-color: rgba(110, 122, 69, 150);
     }}
@@ -171,7 +171,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     QFrame#discoveryRow {{
         background-color: {SURFACE_RAISED};
         border: 1px solid rgba(184, 155, 106, 42);
-        border-radius: 6px;
+        border-radius: 3px;
     }}
 
     QCheckBox {{
@@ -183,7 +183,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     QCheckBox::indicator {{
         width: 18px;
         height: 18px;
-        border-radius: 6px;
+        border-radius: 3px;
         border: 1px solid rgba(184, 155, 106, 88);
         background: {SURFACE_RAISED};
     }}
@@ -210,7 +210,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: {TEXT};
         background-color: {PRIMARY};
         border: 1px solid rgba(230, 214, 174, 22);
-        border-radius: 6px;
+        border-radius: 3px;
         font-weight: 700;
     }}
 
@@ -228,7 +228,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: {BRONZE};
         background-color: transparent;
         border: 1px solid rgba(184, 155, 106, 145);
-        border-radius: 6px;
+        border-radius: 3px;
         font-size: 13px;
         font-weight: 600;
     }}
@@ -282,7 +282,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: {BRONZE};
         background-color: transparent;
         border: 1px solid rgba(184, 155, 106, 145);
-        border-radius: 6px;
+        border-radius: 3px;
         font-weight: 600;
     }}
 
@@ -310,7 +310,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: #DD746D;
         background-color: transparent;
         border: 1px solid rgba(192, 50, 43, 180);
-        border-radius: 6px;
+        border-radius: 3px;
         font-weight: 650;
     }}
 
@@ -358,7 +358,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     QScrollBar::handle:vertical {{
         min-height: 32px;
         background: rgba(184, 155, 106, 68);
-        border-radius: 4px;
+        border-radius: 3px;
     }}
 
     QScrollBar::handle:vertical:hover {{
@@ -378,19 +378,19 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         max-height: 10px;
         background-color: {SURFACE_RAISED};
         border: 1px solid rgba(184, 155, 106, 48);
-        border-radius: 5px;
+        border-radius: 3px;
     }}
 
     QProgressBar#discoveryProgress::chunk {{
         background-color: {WARNING};
-        border-radius: 4px;
+        border-radius: 2px;
     }}
 
     QToolTip {{
         color: {TEXT};
         background-color: {SURFACE_RAISED};
         border: 1px solid rgba(184, 155, 106, 90);
-        border-radius: 6px;
+        border-radius: 3px;
         padding: 6px 8px;
     }}
     """
