@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QMouseEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -28,6 +28,7 @@ from .widgets import (
     GrainFrame,
     LogoGlyph,
     ToolIconButton,
+    _mascot_pixmap,
     set_action_button_capitalization,
     set_heading_capitalization,
 )
@@ -128,6 +129,17 @@ class FramelessDialog(QDialog):
 class OnvifProgressDialog(FramelessDialog):
     """Неблокирующий индикатор фонового WS-Discovery/ONVIF-запроса."""
 
+    _SCAN_INTERVAL_MS = 425
+    _SCAN_FRAME_SIZE = QSize(118, 160)
+    _SCAN_SEQUENCE = (
+        "scan_1",
+        "scan_2",
+        "scan_3",
+        "scan_4",
+        "scan_3",
+        "scan_2",
+    )
+
     def __init__(
         self,
         title: str,
@@ -139,12 +151,23 @@ class OnvifProgressDialog(FramelessDialog):
             title,
             parent,
             preferred_width=620,
-            preferred_height=430,
+            preferred_height=520,
         )
         content = QWidget(self.surface)
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(30, 24, 26, 28)
-        layout.setSpacing(15)
+        layout.setContentsMargins(30, 18, 26, 24)
+        layout.setSpacing(13)
+
+        self._scan_frame_index = 0
+        self._scan_label = QLabel(content)
+        self._scan_label.setObjectName("scanMascot")
+        self._scan_label.setFixedSize(self._SCAN_FRAME_SIZE)
+        self._scan_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(
+            self._scan_label,
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
 
         label = QLabel(heading, content)
         label.setObjectName("dialogTitle")
@@ -172,6 +195,40 @@ class OnvifProgressDialog(FramelessDialog):
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
         self.surface_layout.addWidget(content, 1)
+
+        self._scan_timer = QTimer(self)
+        self._scan_timer.setInterval(self._SCAN_INTERVAL_MS)
+        self._scan_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._scan_timer.timeout.connect(self._advance_scan_frame)
+        self._show_scan_frame()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self._scan_frame_index = 0
+        self._show_scan_frame()
+        self._scan_timer.start()
+
+    def done(self, result: int) -> None:
+        self._scan_timer.stop()
+        super().done(result)
+
+    def _advance_scan_frame(self) -> None:
+        self._scan_frame_index = (
+            self._scan_frame_index + 1
+        ) % len(self._SCAN_SEQUENCE)
+        self._show_scan_frame()
+
+    def _show_scan_frame(self) -> None:
+        frame = self._SCAN_SEQUENCE[self._scan_frame_index]
+        pixmap = _mascot_pixmap(
+            frame,
+            self._SCAN_FRAME_SIZE,
+            self._scan_label.devicePixelRatioF(),
+        )
+        if pixmap is None:
+            self._scan_label.clear()
+            return
+        self._scan_label.setPixmap(pixmap)
 
 
 class OnvifDiscoveryDialog(FramelessDialog):

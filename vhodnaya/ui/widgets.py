@@ -205,6 +205,10 @@ _MASCOT_FILES = {
     "calm": "mascot_calm.png",
     "sad": "mascot_sad.png",
     "search": "mascot_search.png",
+    "scan_1": "mascot_scan_1.png",
+    "scan_2": "mascot_scan_2.png",
+    "scan_3": "mascot_scan_3.png",
+    "scan_4": "mascot_scan_4.png",
 }
 
 
