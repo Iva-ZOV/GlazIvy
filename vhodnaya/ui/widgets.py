@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
+from PIL import Image
 from PySide6.QtCore import (
     QEvent,
     Property,
@@ -20,6 +21,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QImage,
     QKeyEvent,
     QLinearGradient,
     QMouseEvent,
@@ -197,6 +199,13 @@ _logo_source: QPixmap | None = None
 _logo_cache: dict[tuple[int, int, int], QPixmap] = {}
 _grain_source: QPixmap | None = None
 _grain_cache: dict[int, QPixmap] = {}
+_mascot_sources: dict[str, Image.Image | None] = {}
+_mascot_cache: dict[tuple[str, int, int, int], QPixmap] = {}
+_MASCOT_FILES = {
+    "calm": "mascot_calm.png",
+    "sad": "mascot_sad.png",
+    "search": "mascot_search.png",
+}
 
 
 def set_heading_capitalization(label: QLabel) -> None:
@@ -243,6 +252,54 @@ def _logo_pixmap(size: QSize, dpr: float) -> QPixmap | None:
     scaled.setDevicePixelRatio(dpr)
     _logo_cache[key] = scaled
     return scaled
+
+
+def _mascot_pixmap(kind: str, max_size: QSize, dpr: float) -> QPixmap | None:
+    """Возвращает BOX-уменьшенную позу, кэшированную по размеру и DPR."""
+
+    if kind not in _MASCOT_FILES or max_size.isEmpty():
+        return None
+
+    if kind not in _mascot_sources:
+        try:
+            with Image.open(resource_path("assets", _MASCOT_FILES[kind])) as source:
+                _mascot_sources[kind] = source.convert("RGBA")
+        except (OSError, ValueError):
+            _mascot_sources[kind] = None
+    source = _mascot_sources[kind]
+    if source is None:
+        return None
+
+    ratio_key = max(100, round(dpr * 100))
+    pixel_width_limit = max(1, round(max_size.width() * dpr))
+    pixel_height_limit = max(1, round(max_size.height() * dpr))
+    scale = min(
+        pixel_width_limit / source.width,
+        pixel_height_limit / source.height,
+    )
+    pixel_width = max(1, round(source.width * scale))
+    pixel_height = max(1, round(source.height * scale))
+    key = (kind, pixel_width, pixel_height, ratio_key)
+    cached = _mascot_cache.get(key)
+    if cached is not None:
+        return cached
+
+    resized = source.resize(
+        (pixel_width, pixel_height),
+        resample=Image.Resampling.BOX,
+    )
+    rgba = resized.tobytes("raw", "RGBA")
+    image = QImage(
+        rgba,
+        pixel_width,
+        pixel_height,
+        pixel_width * 4,
+        QImage.Format.Format_RGBA8888,
+    ).copy()
+    pixmap = QPixmap.fromImage(image)
+    pixmap.setDevicePixelRatio(dpr)
+    _mascot_cache[key] = pixmap
+    return pixmap
 
 
 def _grain_pixmap(dpr: float) -> QPixmap | None:
@@ -943,7 +1000,8 @@ class VideoCanvas(QWidget):
 
     def _draw_frame(self, painter: QPainter) -> None:
         if self._frame is None:
-            self._draw_placeholder(painter)
+            if self._state not in {"connecting", "reconnecting", "offline"}:
+                self._draw_placeholder(painter)
             return
         image = self._frame
         source_width = image.width()
@@ -981,15 +1039,62 @@ class VideoCanvas(QWidget):
             "offline": "Камера недоступна",
         }.get(self._state, "Подключение…")
 
-        max_width = min(460.0, max(280.0, self.width() - 80.0))
-        card = QRectF(
-            (self.width() - max_width) / 2,
-            self.height() / 2 + 28,
-            max_width,
-            82,
-        )
-        if self._frame is not None:
-            card.moveCenter(QPointF(self.width() / 2, self.height() / 2))
+        mascot_kind = {
+            "connecting": "search",
+            "reconnecting": "search",
+            "offline": "sad",
+        }.get(self._state)
+        mascot: QPixmap | None = None
+        mascot_position: QPointF | None = None
+
+        if mascot_kind is None:
+            # Unconfigured сохраняет прежний глиф и исходную композицию карточки.
+            max_width = min(460.0, max(280.0, self.width() - 80.0))
+            card = QRectF(
+                (self.width() - max_width) / 2,
+                self.height() / 2 + 28,
+                max_width,
+                82,
+            )
+            if self._frame is not None:
+                card.moveCenter(QPointF(self.width() / 2, self.height() / 2))
+        else:
+            outer_margin = 16.0
+            card_width = min(460.0, max(160.0, self.width() - outer_margin * 2))
+            card = QRectF(
+                (self.width() - card_width) / 2,
+                0.0,
+                card_width,
+                82.0,
+            )
+            gap = 10.0
+            desired_height = min(164, round(self.height() * 0.36))
+            available_height = round(
+                self.height() - card.height() - gap - outer_margin * 2
+            )
+            if desired_height >= 48 and available_height >= 48:
+                mascot = _mascot_pixmap(
+                    mascot_kind,
+                    QSize(
+                        max(1, round(min(card.width() * 0.56, self.width() - 32))),
+                        max(1, min(desired_height, available_height)),
+                    ),
+                    self.devicePixelRatioF(),
+                )
+            if mascot is not None:
+                mascot_size = mascot.deviceIndependentSize()
+                group_height = mascot_size.height() + gap + card.height()
+                group_top = max(outer_margin, (self.height() - group_height) / 2)
+                mascot_position = QPointF(
+                    round((self.width() - mascot_size.width()) / 2),
+                    round(group_top),
+                )
+                card.moveTop(mascot_position.y() + mascot_size.height() + gap)
+            else:
+                card.moveCenter(QPointF(self.width() / 2, self.height() / 2))
+
+        if mascot is not None and mascot_position is not None:
+            painter.drawPixmap(mascot_position, mascot)
 
         painter.setPen(QPen(_color(BRONZE, 76), 1))
         painter.setBrush(_color(SURFACE, 238))

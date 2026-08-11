@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import time
 
-from PySide6.QtCore import QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -36,6 +36,7 @@ from .widgets import (
     LogoGlyph,
     SegmentedControl,
     ToolIconButton,
+    _mascot_pixmap,
     draw_grain,
     set_heading_capitalization,
 )
@@ -574,6 +575,7 @@ class CameraBoard(QWidget):
         self._layout_mode = mode
         self._last_raise_snapshot = None
         self._apply_current_layout()
+        self.update()
         return True
 
     def toggle_camera_expanded(self, camera_id: str) -> None:
@@ -636,17 +638,10 @@ class CameraBoard(QWidget):
         count = len(camera_ids)
         if count == 0:
             return
-        columns = math.ceil(math.sqrt(count))
-        rows = math.ceil(count / columns)
+        columns, _rows, tile_width, tile_height, start_x, start_y = (
+            self._grid_metrics(count)
+        )
         spacing = self.GRID_SPACING
-        available_width = max(1, self.width() - spacing * (columns + 1))
-        available_height = max(1, self.height() - spacing * (rows + 1))
-        tile_width = max(1, available_width // columns)
-        tile_height = max(1, available_height // rows)
-        grid_width = tile_width * columns + spacing * (columns - 1)
-        grid_height = tile_height * rows + spacing * (rows - 1)
-        start_x = max(0, (self.width() - grid_width) // 2)
-        start_y = max(0, (self.height() - grid_height) // 2)
 
         for index, camera_id in enumerate(camera_ids):
             tile = self._tiles[camera_id]
@@ -659,6 +654,20 @@ class CameraBoard(QWidget):
                 tile_height,
             )
         self._raise_in_saved_order()
+
+    def _grid_metrics(self, count: int) -> tuple[int, int, int, int, int, int]:
+        columns = math.ceil(math.sqrt(count))
+        rows = math.ceil(count / columns)
+        spacing = self.GRID_SPACING
+        available_width = max(1, self.width() - spacing * (columns + 1))
+        available_height = max(1, self.height() - spacing * (rows + 1))
+        tile_width = max(1, available_width // columns)
+        tile_height = max(1, available_height // rows)
+        grid_width = tile_width * columns + spacing * (columns - 1)
+        grid_height = tile_height * rows + spacing * (rows - 1)
+        start_x = max(0, (self.width() - grid_width) // 2)
+        start_y = max(0, (self.height() - grid_height) // 2)
+        return columns, rows, tile_width, tile_height, start_x, start_y
 
     def _apply_current_layout(self) -> bool:
         self._sync_tile_states()
@@ -751,6 +760,70 @@ class CameraBoard(QWidget):
         painter.fillRect(rect, glow)
         draw_grain(painter, rect, self.devicePixelRatioF(), opacity=0.20)
 
+        empty_mascot_bottom: float | None = None
+        if not self._tiles:
+            mascot_height = min(
+                round(self.height() * 0.23),
+                max(1, self.height() - 150),
+            )
+            mascot = _mascot_pixmap(
+                "calm",
+                QSize(max(1, self.width() - 48), max(1, mascot_height)),
+                self.devicePixelRatioF(),
+            )
+            if mascot is not None:
+                mascot_size = mascot.deviceIndependentSize()
+                content_height = mascot_size.height() + 14 + 42 + 54
+                mascot_y = round(max(18.0, (self.height() - content_height) / 2))
+                mascot_position = QPointF(
+                    round((self.width() - mascot_size.width()) / 2),
+                    mascot_y,
+                )
+                painter.save()
+                painter.setOpacity(0.90)
+                painter.drawPixmap(mascot_position, mascot)
+                painter.restore()
+                empty_mascot_bottom = mascot_y + mascot_size.height()
+        elif self._layout_mode == "grid" and self._expanded_camera_id is None:
+            count = len(self._tiles)
+            columns, rows, tile_width, tile_height, start_x, start_y = (
+                self._grid_metrics(count)
+            )
+            if count < columns * rows:
+                empty_index = columns * rows - 1
+                row, column = divmod(empty_index, columns)
+                cell = QRectF(
+                    start_x + column * (tile_width + self.GRID_SPACING),
+                    start_y + row * (tile_height + self.GRID_SPACING),
+                    tile_width,
+                    tile_height,
+                )
+                padding = max(14, self.GRID_SPACING + 4)
+                mascot = _mascot_pixmap(
+                    "calm",
+                    QSize(
+                        max(1, round(cell.width() - padding * 2)),
+                        max(
+                            1,
+                            min(
+                                round(self.height() * 0.23),
+                                round(cell.height() - padding * 2),
+                            ),
+                        ),
+                    ),
+                    self.devicePixelRatioF(),
+                )
+                if mascot is not None:
+                    mascot_size = mascot.deviceIndependentSize()
+                    mascot_position = QPointF(
+                        round(cell.right() - padding - mascot_size.width()),
+                        round(cell.bottom() - padding - mascot_size.height()),
+                    )
+                    painter.save()
+                    painter.setOpacity(0.90)
+                    painter.drawPixmap(mascot_position, mascot)
+                    painter.restore()
+
         if self._tiles:
             return
         title_font = QFont(self.font())
@@ -758,9 +831,13 @@ class CameraBoard(QWidget):
         title_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(title_font)
         painter.setPen(QColor(TEXT))
-        center_y = self.height() / 2 - 24
+        title_top = (
+            empty_mascot_bottom + 14
+            if empty_mascot_bottom is not None
+            else self.height() / 2 - 48
+        )
         painter.drawText(
-            QRectF(30, center_y - 24, self.width() - 60, 42),
+            QRectF(30, title_top, self.width() - 60, 42),
             Qt.AlignmentFlag.AlignCenter,
             "Пока нет камер",
         )
@@ -769,7 +846,7 @@ class CameraBoard(QWidget):
         painter.setFont(helper_font)
         painter.setPen(QColor(TEXT_MUTED))
         painter.drawText(
-            QRectF(30, center_y + 18, self.width() - 60, 54),
+            QRectF(30, title_top + 42, self.width() - 60, 54),
             Qt.AlignmentFlag.AlignHCenter
             | Qt.AlignmentFlag.AlignTop
             | Qt.TextFlag.TextWordWrap,
