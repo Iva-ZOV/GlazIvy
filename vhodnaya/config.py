@@ -6,13 +6,15 @@ import base64
 import binascii
 import json
 import os
+import re
 import shutil
 import string
+import unicodedata
 import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from .constants import (
     APP_SLUG,
@@ -55,6 +57,202 @@ class CameraGeometry:
             raise ConfigError("Размер камеры должен быть положительным.")
         if self.z < 0:
             raise ConfigError("Z-порядок камеры не может быть отрицательным.")
+
+
+_STREAM_CREDENTIAL_KEYS = {"user", "password"}
+_STREAM_CREDENTIAL_FIELD_RE = re.compile(r"(?:^|[&/?])(?P<key>[^=&/?]+)=")
+_STREAM_CREDENTIAL_UNDERSCORE_FIELD_RE = re.compile(
+    r"_(?P<key>[^_=&/?]+)="
+)
+_STREAM_CREDENTIAL_VALUE_END_RE = re.compile(r"[&/?]")
+_STREAM_CREDENTIAL_STRUCTURAL_CHARS = frozenset(" &?#/")
+
+
+def _stream_credential_key(raw_key: str) -> str | None:
+    """Возвращает канонное имя поля с учётом percent-encoding и регистра."""
+
+    key = unquote(raw_key).casefold()
+    return key if key in _STREAM_CREDENTIAL_KEYS else None
+
+
+def _encode_embedded_stream_credential(value: str) -> str:
+    """Экранирует только разделители path/query и управляющие символы."""
+
+    return "".join(
+        quote(character, safe="")
+        if character in _STREAM_CREDENTIAL_STRUCTURAL_CHARS
+        or unicodedata.category(character) == "Cc"
+        else character
+        for character in value
+    )
+
+
+def _stream_credential_value_spans(
+    component: str,
+) -> list[tuple[str, int, int]]:
+    """Находит значения user/password в path или query, не меняя компонент."""
+
+    spans: list[tuple[str, int, int]] = []
+    underscore_password_spans: list[tuple[str, int, int]] = []
+    for match in _STREAM_CREDENTIAL_FIELD_RE.finditer(component):
+        key = _stream_credential_key(match.group("key"))
+        if key is None:
+            continue
+
+        value_start = match.end()
+        delimiter = _STREAM_CREDENTIAL_VALUE_END_RE.search(component, value_start)
+        value_end = delimiter.start() if delimiter is not None else len(component)
+
+        if key == "user":
+            for password_match in _STREAM_CREDENTIAL_UNDERSCORE_FIELD_RE.finditer(
+                component,
+                value_start,
+                value_end,
+            ):
+                if _stream_credential_key(password_match.group("key")) != "password":
+                    continue
+                value_end = password_match.start()
+                password_start = password_match.end()
+                password_delimiter = _STREAM_CREDENTIAL_VALUE_END_RE.search(
+                    component,
+                    password_start,
+                )
+                password_end = (
+                    password_delimiter.start()
+                    if password_delimiter is not None
+                    else len(component)
+                )
+                underscore_password_spans.append(
+                    ("password", password_start, password_end)
+                )
+                break
+
+        spans.append((key, value_start, value_end))
+
+    spans.extend(underscore_password_spans)
+    return sorted(spans, key=lambda span: span[1])
+
+
+def _stream_credential_component_ranges(
+    url: str,
+    path: str,
+) -> list[tuple[str, int, int]]:
+    """Возвращает точные диапазоны path/query внутри исходного URL."""
+
+    fragment_start = url.find("#")
+    content_end = fragment_start if fragment_start >= 0 else len(url)
+    query_delimiter = url.find("?", 0, content_end)
+    path_end = query_delimiter if query_delimiter >= 0 else content_end
+    path_start = path_end - len(path)
+
+    ranges = [("path", path_start, path_end)]
+    if query_delimiter >= 0:
+        ranges.append(("query", query_delimiter + 1, content_end))
+    return ranges
+
+
+def _stream_authority_start(url: str) -> int | None:
+    scheme_end = url.find(":")
+    if scheme_end < 0 or url[scheme_end + 1 : scheme_end + 3] != "//":
+        return None
+    return scheme_end + 3
+
+
+def extract_stream_credentials(url: str) -> tuple[str, str]:
+    """Декодирует userinfo, но сохраняет значения path/query буквально."""
+
+    parsed = urlsplit(url)
+    if parsed.username is not None:
+        return unquote(parsed.username), unquote(parsed.password or "")
+
+    credentials: dict[str, str] = {}
+    for _, start, end in _stream_credential_component_ranges(url, parsed.path):
+        component = url[start:end]
+        for key, value_start, value_end in _stream_credential_value_spans(component):
+            if key not in credentials:
+                credentials[key] = component[value_start:value_end]
+    return credentials.get("user", ""), credentials.get("password", "")
+
+
+def replace_stream_credentials(url: str, user: str, password: str) -> str:
+    """Заменяет реквизиты на месте; для текущих значений возвращает URL как есть."""
+
+    if not url:
+        return url
+    if (user, password) == extract_stream_credentials(url):
+        return url
+
+    parsed = urlsplit(url)
+    userinfo_replacements = {
+        "user": quote(user, safe=""),
+        "password": quote(password, safe=""),
+    }
+    embedded_replacements = {
+        "user": _encode_embedded_stream_credential(user),
+        "password": _encode_embedded_stream_credential(password),
+    }
+    edits: list[tuple[int, int, str]] = []
+
+    authority_start = _stream_authority_start(url)
+    if parsed.username is not None and authority_start is not None:
+        userinfo_end = url.rfind(
+            "@",
+            authority_start,
+            authority_start + len(parsed.netloc),
+        )
+        if userinfo_end >= 0:
+            edits.append(
+                (
+                    authority_start,
+                    userinfo_end,
+                    f"{userinfo_replacements['user']}:"
+                    f"{userinfo_replacements['password']}",
+                )
+            )
+
+    for kind, start, end in _stream_credential_component_ranges(url, parsed.path):
+        component = url[start:end]
+        component_keys: set[str] = set()
+        for key, value_start, value_end in _stream_credential_value_spans(component):
+            edits.append(
+                (
+                    start + value_start,
+                    start + value_end,
+                    embedded_replacements[key],
+                )
+            )
+            component_keys.add(key)
+
+        if kind == "query" and component_keys:
+            missing_fields = "".join(
+                f"&{key}={embedded_replacements[key]}"
+                for key in ("user", "password")
+                if key not in component_keys
+            )
+            if missing_fields:
+                edits.append((end, end, missing_fields))
+
+    if not edits and authority_start is not None:
+        edits.append(
+            (
+                authority_start,
+                authority_start,
+                f"{userinfo_replacements['user']}:"
+                f"{userinfo_replacements['password']}@",
+            )
+        )
+
+    if not edits:
+        return url
+
+    parts: list[str] = []
+    cursor = 0
+    for start, end, replacement in sorted(edits, key=lambda edit: (edit[0], edit[1])):
+        parts.append(url[cursor:start])
+        parts.append(replacement)
+        cursor = end
+    parts.append(url[cursor:])
+    return "".join(parts)
 
 
 @dataclass(frozen=True, slots=True)

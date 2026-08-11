@@ -14,7 +14,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import CameraConfig, ConfigError
+from ..config import (
+    CameraConfig,
+    ConfigError,
+    extract_stream_credentials,
+    replace_stream_credentials,
+)
 from .widgets import SegmentedControl
 
 
@@ -79,26 +84,41 @@ class CameraForm(QWidget):
             grid.addWidget(self.host_block, 1, 0)
             grid.addWidget(self.port_block, 1, 1)
 
-        username = config.onvif_username if is_onvif else config.username
-        password = config.onvif_password if is_onvif else config.password
+        if is_onvif:
+            preferred_url = (
+                config.stream_url_hd if config.quality == "hd" else config.stream_url_sd
+            )
+            fallback_url = (
+                config.stream_url_sd if config.quality == "hd" else config.stream_url_hd
+            )
+            username = ""
+            password = ""
+            for stream_url in (preferred_url, fallback_url):
+                if not stream_url:
+                    continue
+                username, password = extract_stream_credentials(stream_url)
+                if username or password:
+                    break
+            else:
+                username = config.username
+                password = config.password
+        else:
+            username = config.username
+            password = config.password
+        self._initial_credentials = (username, password)
         self.username_edit = QLineEdit(username, self)
-        self.username_edit.setPlaceholderText(
-            "Обычно admin" if is_onvif else "Логин RTSP"
-        )
+        self.username_edit.setPlaceholderText("Логин RTSP")
         self.username_edit.setClearButtonEnabled(True)
         self.password_edit = QLineEdit(password, self)
-        self.password_edit.setPlaceholderText(
-            "Пароль ONVIF" if is_onvif else "Пароль RTSP"
-        )
+        self.password_edit.setPlaceholderText("Пароль RTSP")
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        credentials_kind = "ONVIF" if is_onvif else "RTSP"
         grid.addWidget(
-            FieldBlock(f"Логин {credentials_kind}", self.username_edit, self),
+            FieldBlock("Логин RTSP", self.username_edit, self),
             2,
             0,
         )
         grid.addWidget(
-            FieldBlock(f"Пароль {credentials_kind}", self.password_edit, self),
+            FieldBlock("Пароль RTSP", self.password_edit, self),
             2,
             1,
         )
@@ -126,8 +146,8 @@ class CameraForm(QWidget):
         grid.addWidget(path_help, 5, 0, 1, 2)
 
         self.onvif_help = QLabel(
-            "RTSP-адрес запрашивается у камеры через сохранённый ONVIF endpoint "
-            "при вводе новых учётных данных.",
+            "Учётные данные получены от камеры автоматически при поиске. "
+            "Менять их нужно только если вы сменили пароль на самой камере.",
             self,
         )
         self.onvif_help.setObjectName("helperText")
@@ -229,19 +249,28 @@ class CameraForm(QWidget):
         if self._base_config.source == "onvif":
             username = self.username_edit.text()
             password = self.password_edit.text()
-            changes.update(
-                onvif_username=username,
-                onvif_password=password,
-            )
-            if (
-                username != self._base_config.onvif_username
-                or password != self._base_config.onvif_password
-            ):
-                # Старый URL мог содержать прежнюю учётку; его нельзя переиспользовать.
+            if (username, password) != self._initial_credentials:
                 changes.update(
-                    stream_url_hd="",
-                    stream_url_sd="",
-                    onvif_media_endpoint="",
+                    username=username,
+                    password=password,
+                    stream_url_hd=(
+                        replace_stream_credentials(
+                            self._base_config.stream_url_hd,
+                            username,
+                            password,
+                        )
+                        if self._base_config.stream_url_hd
+                        else ""
+                    ),
+                    stream_url_sd=(
+                        replace_stream_credentials(
+                            self._base_config.stream_url_sd,
+                            username,
+                            password,
+                        )
+                        if self._base_config.stream_url_sd
+                        else ""
+                    ),
                 )
         else:
             changes.update(
