@@ -32,6 +32,7 @@ from .widgets import LogoGlyph, ToolIconButton
 
 class BoardTitleBar(QWidget):
     add_camera_clicked = Signal()
+    find_cameras_clicked = Signal()
     settings_clicked = Signal()
     fullscreen_clicked = Signal()
     minimize_clicked = Signal()
@@ -42,6 +43,7 @@ class BoardTitleBar(QWidget):
         self.setObjectName("titleBar")
         self.setFixedHeight(60)
         self._compact = False
+        self._discovery_busy = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 0, 10, 0)
@@ -59,6 +61,12 @@ class BoardTitleBar(QWidget):
         self.camera_count = QLabel(self)
         self.camera_count.setObjectName("cameraCount")
         layout.addWidget(self.camera_count)
+
+        self.find_button = QPushButton("Найти камеры", self)
+        self.find_button.setObjectName("secondaryButton")
+        self.find_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.find_button.clicked.connect(self.find_cameras_clicked)
+        layout.addWidget(self.find_button)
 
         self.add_button = QPushButton("＋  Добавить камеру", self)
         self.add_button.setObjectName("addCameraButton")
@@ -109,7 +117,19 @@ class BoardTitleBar(QWidget):
         self._compact = compact
         self.subtitle.setVisible(not compact)
         self.camera_count.setVisible(not compact)
-        self.add_button.setText("＋  Камеру" if compact else "＋  Добавить камеру")
+        self._sync_action_buttons()
+
+    def set_discovery_busy(self, busy: bool) -> None:
+        self._discovery_busy = busy
+        self.find_button.setEnabled(not busy)
+        self._sync_action_buttons()
+
+    def _sync_action_buttons(self) -> None:
+        if self._discovery_busy:
+            self.find_button.setText("Ищем…")
+        else:
+            self.find_button.setText("Найти камеры")
+        self.add_button.setText("＋  Камеру" if self._compact else "＋  Добавить камеру")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -198,7 +218,7 @@ class CameraBoard(QWidget):
             self.layout_changed.emit()
         return tile
 
-    def create_camera(self) -> CameraConfig:
+    def create_camera(self, base_config: CameraConfig | None = None) -> CameraConfig:
         board_width = max(self.width(), CameraTile.MINIMUM_WIDTH + 48)
         board_height = max(self.height(), CameraTile.MINIMUM_HEIGHT + 48)
         width = max(
@@ -212,7 +232,7 @@ class CameraBoard(QWidget):
         cascade = len(self._tiles) % 7
         x = min(max(0, board_width - width), 24 + cascade * 30)
         y = min(max(0, board_height - height), 24 + cascade * 26)
-        config = CameraConfig(
+        config = (base_config or CameraConfig()).updated(
             geometry=CameraGeometry(
                 x=x,
                 y=y,
@@ -366,7 +386,7 @@ class CameraBoard(QWidget):
             Qt.AlignmentFlag.AlignHCenter
             | Qt.AlignmentFlag.AlignTop
             | Qt.TextFlag.TextWordWrap,
-            "Нажмите «Добавить камеру», затем откройте её настройки.",
+            "Нажмите «Найти камеры» или добавьте камеру вручную.",
         )
 
     def shutdown(self) -> None:

@@ -41,6 +41,7 @@ class CameraForm(QWidget):
     def __init__(self, config: CameraConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._base_config = config
+        is_onvif = config.source == "onvif"
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         root = QVBoxLayout(self)
@@ -66,20 +67,41 @@ class CameraForm(QWidget):
         self.host_edit = QLineEdit(config.host, self)
         self.host_edit.setPlaceholderText("192.168.1.10")
         self.host_edit.setClearButtonEnabled(True)
+        self.host_edit.setReadOnly(is_onvif)
         self.port_spin = QSpinBox(self)
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(config.port)
-        grid.addWidget(FieldBlock("IP-адрес или имя", self.host_edit, self), 1, 0)
-        grid.addWidget(FieldBlock("RTSP-порт", self.port_spin, self), 1, 1)
+        self.host_block = FieldBlock("IP-адрес или имя", self.host_edit, self)
+        self.port_block = FieldBlock("RTSP-порт", self.port_spin, self)
+        if is_onvif:
+            grid.addWidget(self.host_block, 1, 0, 1, 2)
+        else:
+            grid.addWidget(self.host_block, 1, 0)
+            grid.addWidget(self.port_block, 1, 1)
 
-        self.username_edit = QLineEdit(config.username, self)
-        self.username_edit.setPlaceholderText("Логин RTSP")
+        username = config.onvif_username if is_onvif else config.username
+        password = config.onvif_password if is_onvif else config.password
+        self.username_edit = QLineEdit(username, self)
+        self.username_edit.setPlaceholderText(
+            "Обычно admin" if is_onvif else "Логин RTSP"
+        )
         self.username_edit.setClearButtonEnabled(True)
-        self.password_edit = QLineEdit(config.password, self)
-        self.password_edit.setPlaceholderText("Пароль RTSP")
+        self.password_edit = QLineEdit(password, self)
+        self.password_edit.setPlaceholderText(
+            "Пароль ONVIF" if is_onvif else "Пароль RTSP"
+        )
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        grid.addWidget(FieldBlock("Логин", self.username_edit, self), 2, 0)
-        grid.addWidget(FieldBlock("Пароль", self.password_edit, self), 2, 1)
+        credentials_kind = "ONVIF" if is_onvif else "RTSP"
+        grid.addWidget(
+            FieldBlock(f"Логин {credentials_kind}", self.username_edit, self),
+            2,
+            0,
+        )
+        grid.addWidget(
+            FieldBlock(f"Пароль {credentials_kind}", self.password_edit, self),
+            2,
+            1,
+        )
 
         self.show_password_check = QCheckBox("Показать пароль", self)
         self.show_password_check.toggled.connect(self._toggle_password)
@@ -90,7 +112,8 @@ class CameraForm(QWidget):
             "/user={user}&password={password}&channel=0&stream={stream}.sdp?real_stream"
         )
         self.path_edit.setClearButtonEnabled(True)
-        grid.addWidget(FieldBlock("Шаблон пути потока", self.path_edit, self), 4, 0, 1, 2)
+        self.path_block = FieldBlock("Шаблон пути потока", self.path_edit, self)
+        grid.addWidget(self.path_block, 4, 0, 1, 2)
 
         path_help = QLabel(
             "Оставьте {user}, {password} и {stream} как подстановки. "
@@ -99,7 +122,22 @@ class CameraForm(QWidget):
         )
         path_help.setObjectName("helperText")
         path_help.setWordWrap(True)
+        self.path_help = path_help
         grid.addWidget(path_help, 5, 0, 1, 2)
+
+        self.onvif_help = QLabel(
+            "RTSP-адрес запрашивается у камеры через сохранённый ONVIF endpoint "
+            "при вводе новых учётных данных.",
+            self,
+        )
+        self.onvif_help.setObjectName("helperText")
+        self.onvif_help.setWordWrap(True)
+        grid.addWidget(self.onvif_help, 4, 0, 1, 2)
+
+        self.port_block.setVisible(not is_onvif)
+        self.path_block.setVisible(not is_onvif)
+        self.path_help.setVisible(not is_onvif)
+        self.onvif_help.setVisible(is_onvif)
 
         connection_section = QLabel("Подключение", self)
         connection_section.setObjectName("sectionTitle")
@@ -188,19 +226,40 @@ class CameraForm(QWidget):
 
     def build_config(self) -> CameraConfig | None:
         self._clear_invalid()
-        config = self._base_config.updated(
+        changes: dict[str, object] = dict(
             camera_name=self.name_edit.text().strip(),
             host=self.host_edit.text().strip(),
             port=self.port_spin.value(),
-            username=self.username_edit.text(),
-            password=self.password_edit.text(),
             transport=self.transport_control.value(),
             quality=self.quality_control.value(),
             stream_path=self.path_edit.text().strip(),
             show_clock=self.clock_check.isChecked(),
         )
+        if self._base_config.source == "onvif":
+            username = self.username_edit.text()
+            password = self.password_edit.text()
+            changes.update(
+                onvif_username=username,
+                onvif_password=password,
+            )
+            if (
+                username != self._base_config.onvif_username
+                or password != self._base_config.onvif_password
+            ):
+                # Старый URL мог содержать прежнюю учётку; его нельзя переиспользовать.
+                changes.update(
+                    stream_url_hd="",
+                    stream_url_sd="",
+                    onvif_media_endpoint="",
+                )
+        else:
+            changes.update(
+                username=self.username_edit.text(),
+                password=self.password_edit.text(),
+            )
+        config = self._base_config.updated(**changes)
         try:
-            config.validate(require_connection=True)
+            config.validate(require_connection=config.source != "onvif")
         except ConfigError as exc:
             message = str(exc)
             self.error_label.setText(message)

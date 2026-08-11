@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, QTimer, Qt
+import ipaddress
+import re
+import threading
+from collections.abc import Callable
+from dataclasses import replace
+from urllib.parse import urlsplit
+
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QCloseEvent,
@@ -18,9 +25,55 @@ from PySide6.QtWidgets import QApplication, QFrame, QMessageBox, QVBoxLayout, QW
 from ..autostart import AutostartError, set_autostart
 from ..config import AppConfig, CameraConfig, ConfigError, ConfigStore
 from ..constants import APP_NAME
+from ..onvif import DiscoveredCamera, discover_cameras, resolve_onvif_camera
 from ..resources import application_icon
 from .camera_board import BoardTitleBar, CameraBoard
-from .dialogs import BoardSettingsDialog, SettingsDialog
+from .dialogs import (
+    BoardSettingsDialog,
+    OnvifDiscoveryDialog,
+    OnvifProgressDialog,
+    SettingsDialog,
+)
+
+
+class _OnvifTaskSignals(QObject):
+    succeeded = Signal(object, object)
+    failed = Signal(object)
+
+
+class _OnvifTask:
+    """Daemon-поток с Qt-сигналами; сетевые запросы не блокируют интерфейс."""
+
+    def __init__(self, target: Callable[[threading.Event], object]) -> None:
+        self.signals = _OnvifTaskSignals()
+        self.stop_event = threading.Event()
+        self._target = target
+        self._thread = threading.Thread(
+            target=self._run,
+            name="onvif-ui-task",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def cancel(self) -> None:
+        self.stop_event.set()
+
+    def _run(self) -> None:
+        try:
+            result = self._target(self.stop_event)
+        except Exception:
+            # Исключение может включать URL с паролем — наружу его не передаём.
+            try:
+                self.signals.failed.emit(self)
+            except RuntimeError:
+                pass
+            return
+        try:
+            self.signals.succeeded.emit(self, result)
+        except RuntimeError:
+            pass
 
 
 class MainWindow(QWidget):
@@ -40,6 +93,11 @@ class MainWindow(QWidget):
         self._shutting_down = False
         self._config_dirty = False
         self._was_maximized_before_fullscreen = False
+        self._onvif_task: _OnvifTask | None = None
+        self._onvif_progress: OnvifProgressDialog | None = None
+        self._onvif_cancelled = False
+        self._onvif_success_callback: Callable[[object], None] | None = None
+        self._onvif_failure_callback: Callable[[], None] | None = None
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(application_icon())
@@ -76,9 +134,10 @@ class MainWindow(QWidget):
         self.board = CameraBoard(config.cameras, self.surface)
         surface_layout.addWidget(self.board, 1)
         self.title_bar.set_camera_count(self.board.camera_count())
-        self.title_bar.set_compact(self.width() < 960)
+        self.title_bar.set_compact(self.width() < 1080)
 
         self.title_bar.add_camera_clicked.connect(self.add_camera)
+        self.title_bar.find_cameras_clicked.connect(self.find_cameras)
         self.title_bar.settings_clicked.connect(self.open_board_settings)
         self.title_bar.fullscreen_clicked.connect(self.toggle_fullscreen)
         self.title_bar.minimize_clicked.connect(self.showMinimized)
@@ -164,6 +223,208 @@ class MainWindow(QWidget):
     def add_camera(self) -> None:
         self.board.create_camera()
 
+    @staticmethod
+    def _canonical_ip(value: str) -> str:
+        value = value.strip().strip("[]").split("%", 1)[0]
+        try:
+            return ipaddress.ip_address(value).compressed
+        except ValueError:
+            return value.lower()
+
+    def _camera_ips(self) -> set[str]:
+        result: set[str] = set()
+        for camera in self.board.camera_configs():
+            if camera.host.strip():
+                result.add(self._canonical_ip(camera.host))
+            if camera.onvif_endpoint:
+                try:
+                    hostname = urlsplit(camera.onvif_endpoint).hostname
+                except ValueError:
+                    hostname = None
+                if hostname:
+                    result.add(self._canonical_ip(hostname))
+        return result
+
+    def _name_discovered_cameras(
+        self,
+        cameras: tuple[DiscoveredCamera, ...],
+    ) -> tuple[DiscoveredCamera, ...]:
+        used_numbers: set[int] = set()
+        used_names = {
+            camera.camera_name.casefold() for camera in self.board.camera_configs()
+        }
+        for name in used_names:
+            match = re.fullmatch(r"камера\s+(\d+)", name, re.IGNORECASE)
+            if match:
+                used_numbers.add(int(match.group(1)))
+
+        result: list[DiscoveredCamera] = []
+        next_number = 1
+        for camera in cameras:
+            name = " ".join(camera.name.split())
+            if not name:
+                while (
+                    next_number in used_numbers
+                    or f"камера {next_number}" in used_names
+                ):
+                    next_number += 1
+                name = f"Камера {next_number}"
+                used_numbers.add(next_number)
+                used_names.add(name.casefold())
+                next_number += 1
+            result.append(replace(camera, name=name))
+        return tuple(result)
+
+    def _begin_onvif_task(
+        self,
+        target: Callable[[threading.Event], object],
+        progress: OnvifProgressDialog,
+        on_success: Callable[[object], None],
+        on_failure: Callable[[], None],
+    ) -> bool:
+        if self._onvif_task is not None:
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "Предыдущий ONVIF-запрос ещё завершается. Попробуйте через несколько секунд.",
+            )
+            progress.deleteLater()
+            return False
+
+        task = _OnvifTask(target)
+        self._onvif_task = task
+        self._onvif_progress = progress
+        self._onvif_cancelled = False
+        self._onvif_success_callback = on_success
+        self._onvif_failure_callback = on_failure
+        self.title_bar.set_discovery_busy(True)
+        task.signals.succeeded.connect(self._on_onvif_task_succeeded)
+        task.signals.failed.connect(self._on_onvif_task_failed)
+        progress.rejected.connect(lambda current=task: self._cancel_onvif_task(current))
+        progress.show()
+        task.start()
+        return True
+
+    def _cancel_onvif_task(self, task: _OnvifTask) -> None:
+        if task is not self._onvif_task:
+            return
+        self._onvif_cancelled = True
+        task.cancel()
+
+    def _on_onvif_task_succeeded(self, task: object, result: object) -> None:
+        if not isinstance(task, _OnvifTask):
+            return
+        callback = self._onvif_success_callback
+        if callback is None:
+            return
+        self._finish_onvif_task(task, callback, result=result)
+
+    def _on_onvif_task_failed(self, task: object) -> None:
+        if not isinstance(task, _OnvifTask):
+            return
+        callback = self._onvif_failure_callback
+        if callback is None:
+            return
+        self._finish_onvif_task(task, callback)
+
+    def _finish_onvif_task(
+        self,
+        task: _OnvifTask,
+        callback: Callable[..., None],
+        *,
+        result: object | None = None,
+    ) -> None:
+        if task is not self._onvif_task:
+            return
+        cancelled = self._onvif_cancelled
+        progress = self._onvif_progress
+        self._onvif_task = None
+        self._onvif_progress = None
+        self._onvif_cancelled = False
+        self._onvif_success_callback = None
+        self._onvif_failure_callback = None
+        self.title_bar.set_discovery_busy(False)
+        if progress is not None:
+            if progress.isVisible():
+                progress.accept()
+            progress.deleteLater()
+        if cancelled or self._shutting_down:
+            return
+        if result is None:
+            callback()
+        else:
+            callback(result)
+
+    def find_cameras(self) -> None:
+        progress = OnvifProgressDialog(
+            "Поиск камер",
+            "Ищем ONVIF-камеры…",
+            "Отправляем WS-Discovery Probe по сетевым интерфейсам, затем "
+            "запрашиваем профили и RTSP-адреса. Это может занять несколько секунд.",
+            self,
+        )
+        self._begin_onvif_task(
+            lambda stop_event: discover_cameras(
+                timeout=4.0,
+                stop_event=stop_event,
+            ),
+            progress,
+            self._show_discovered_cameras,
+            self._show_discovery_error,
+        )
+
+    def _show_discovery_error(self) -> None:
+        QMessageBox.warning(
+            self,
+            APP_NAME,
+            "Не удалось выполнить поиск камер. Проверьте сетевое подключение "
+            "и разрешение брандмауэра для UDP 3702.",
+        )
+
+    def _show_discovered_cameras(self, payload: object) -> None:
+        cameras = tuple(
+            camera
+            for camera in (payload if isinstance(payload, tuple) else ())
+            if isinstance(camera, DiscoveredCamera)
+        )
+        if not cameras:
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "ONVIF-камеры не найдены. Убедитесь, что камера находится в той же "
+                "сети и ONVIF включён. Брандмауэр также может блокировать UDP 3702.",
+            )
+            return
+
+        cameras = self._name_discovered_cameras(cameras)
+        known_ips = self._camera_ips()
+        dialog = OnvifDiscoveryDialog(cameras, known_ips, self)
+        if dialog.exec() != OnvifDiscoveryDialog.DialogCode.Accepted:
+            return
+
+        added_ips = set(known_ips)
+        added = False
+        for camera in dialog.selected_cameras():
+            ip = self._canonical_ip(camera.ip)
+            if ip in added_ips:
+                continue
+            config = CameraConfig(
+                camera_name=camera.name,
+                host=camera.ip,
+                source="onvif",
+                stream_url_hd=camera.stream_url_hd,
+                stream_url_sd=camera.stream_url_sd,
+                onvif_endpoint=camera.endpoint,
+                onvif_media_endpoint=camera.media_endpoint,
+                onvif_username=camera.username,
+                onvif_password=camera.password,
+            )
+            self.board.create_camera(config)
+            added_ips.add(ip)
+            added = True
+        if added:
+            self._persist_current_config()
+
     def _quick_camera_change(
         self,
         camera_id: str,
@@ -214,6 +475,10 @@ class MainWindow(QWidget):
         candidate_camera = dialog.result_config
         if candidate_camera is None:
             return
+        needs_onvif_refresh = (
+            candidate_camera.source == "onvif"
+            and not candidate_camera.is_configured()
+        )
         candidate = self._snapshot_config(
             replacements={camera_id: candidate_camera}
         )
@@ -223,6 +488,69 @@ class MainWindow(QWidget):
             camera for camera in candidate.cameras if camera.camera_id == camera_id
         )
         self.board.replace_camera_config(applied_camera)
+        if needs_onvif_refresh:
+            self._refresh_onvif_camera(applied_camera)
+
+    def _refresh_onvif_camera(self, camera: CameraConfig) -> None:
+        progress = OnvifProgressDialog(
+            "Подключение камеры",
+            "Запрашиваем поток через ONVIF…",
+            "Проверяем введённую учётную запись и выполняем "
+            "GetProfiles → GetStreamUri. RTSP-адрес будет взят из ответа камеры.",
+            self,
+        )
+        self._begin_onvif_task(
+            lambda stop_event: resolve_onvif_camera(
+                camera.onvif_endpoint,
+                ip=camera.host,
+                credentials=(camera.onvif_username, camera.onvif_password),
+                stop_event=stop_event,
+            ),
+            progress,
+            lambda result: self._apply_resolved_onvif_camera(camera, result),
+            self._show_onvif_credentials_error,
+        )
+
+    def _apply_resolved_onvif_camera(
+        self,
+        requested: CameraConfig,
+        payload: object,
+    ) -> None:
+        if not isinstance(payload, DiscoveredCamera) or not payload.ready:
+            self._show_onvif_credentials_error()
+            return
+        tile = self.board.tile_for(requested.camera_id)
+        if tile is None:
+            return
+        current = tile.config
+        if (
+            current.onvif_endpoint != requested.onvif_endpoint
+            or current.onvif_username != requested.onvif_username
+            or current.onvif_password != requested.onvif_password
+        ):
+            return
+        resolved = current.updated(
+            stream_url_hd=payload.stream_url_hd,
+            stream_url_sd=payload.stream_url_sd,
+            onvif_media_endpoint=payload.media_endpoint,
+        )
+        candidate = self._snapshot_config(
+            replacements={current.camera_id: resolved}
+        )
+        if not self._persist_candidate(candidate):
+            return
+        applied_camera = next(
+            item for item in candidate.cameras if item.camera_id == current.camera_id
+        )
+        self.board.replace_camera_config(applied_camera)
+
+    def _show_onvif_credentials_error(self) -> None:
+        QMessageBox.warning(
+            self,
+            APP_NAME,
+            "Не удалось получить RTSP-поток через ONVIF. Проверьте логин и пароль, "
+            "а также что ONVIF включён в настройках камеры.",
+        )
 
     def open_board_settings(self) -> None:
         dialog = BoardSettingsDialog(self.config.autostart, self)
@@ -313,7 +641,7 @@ class MainWindow(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if hasattr(self, "title_bar"):
-            self.title_bar.set_compact(self.width() < 960)
+            self.title_bar.set_compact(self.width() < 1080)
 
     def _resize_edges(self, position: QPoint) -> Qt.Edge:
         if self.isMaximized() or self.isFullScreen():
@@ -371,6 +699,8 @@ class MainWindow(QWidget):
         self._save_timer.stop()
         if needs_save:
             self._persist_current_config(show_error=False)
+        if self._onvif_task is not None:
+            self._onvif_task.cancel()
         self._shutting_down = True
         self.board.shutdown()
 

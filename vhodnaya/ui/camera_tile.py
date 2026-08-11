@@ -151,6 +151,13 @@ class CameraTile(QWidget):
             config.transport,
             config.quality,
             config.stream_path,
+            config.source,
+            config.stream_url_hd,
+            config.stream_url_sd,
+            config.onvif_endpoint,
+            config.onvif_media_endpoint,
+            config.onvif_username,
+            config.onvif_password,
         )
 
     def _install_pointer_filters(self) -> None:
@@ -383,9 +390,14 @@ class CameraTile(QWidget):
         generation = self._generation
         if not self.config.is_configured():
             self.status.set_state("unconfigured")
+            detail = (
+                "Откройте настройки по шестерёнке и введите логин и пароль ONVIF."
+                if self.config.source == "onvif"
+                else "Откройте настройки по шестерёнке и введите RTSP-данные."
+            )
             self.video.set_stream_state(
                 "unconfigured",
-                "Откройте настройки по шестерёнке и введите RTSP-данные.",
+                detail,
             )
             return
 

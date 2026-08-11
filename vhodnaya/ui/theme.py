@@ -151,6 +151,18 @@ def stylesheet(font_family: str) -> str:
         font-weight: 550;
     }}
 
+    QLabel#discoveryAddress {{
+        color: {TEXT_MUTED};
+        font-size: 13px;
+        font-weight: 600;
+    }}
+
+    QFrame#discoveryRow {{
+        background-color: {SURFACE_RAISED};
+        border: 1px solid rgba(255, 255, 255, 18);
+        border-radius: 12px;
+    }}
+
     QCheckBox {{
         color: #CDD3DC;
         spacing: 9px;
@@ -210,6 +222,13 @@ def stylesheet(font_family: str) -> str:
 
     QPushButton#primaryButton:pressed {{
         background-color: #45C7B4;
+    }}
+
+    QPushButton#primaryButton:disabled,
+    QPushButton#secondaryButton:disabled {{
+        color: {TEXT_MUTED};
+        background-color: rgba(255, 255, 255, 6);
+        border: 1px solid rgba(255, 255, 255, 12);
     }}
 
     QPushButton#secondaryButton {{
@@ -289,6 +308,19 @@ def stylesheet(font_family: str) -> str:
     QScrollBar::sub-page:vertical {{
         height: 0;
         background: transparent;
+    }}
+
+    QProgressBar#discoveryProgress {{
+        min-height: 10px;
+        max-height: 10px;
+        background-color: {SURFACE_RAISED};
+        border: 1px solid rgba(255, 255, 255, 20);
+        border-radius: 5px;
+    }}
+
+    QProgressBar#discoveryProgress::chunk {{
+        background-color: {ACCENT};
+        border-radius: 4px;
     }}
 
     QToolTip {{

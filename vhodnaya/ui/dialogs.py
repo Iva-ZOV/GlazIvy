@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -19,8 +20,10 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import CameraConfig
+from ..onvif import DiscoveredCamera
 from ..resources import application_icon
 from .forms import CameraForm
+from .theme import SUCCESS, TEXT_MUTED, WARNING
 from .widgets import LogoGlyph, ToolIconButton
 
 
@@ -113,6 +116,155 @@ class FramelessDialog(QDialog):
             available.center().x() - self.width() // 2,
             available.center().y() - self.height() // 2,
         )
+
+
+class OnvifProgressDialog(FramelessDialog):
+    """Неблокирующий индикатор фонового WS-Discovery/ONVIF-запроса."""
+
+    def __init__(
+        self,
+        title: str,
+        heading: str,
+        detail: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(
+            title,
+            parent,
+            preferred_width=620,
+            preferred_height=430,
+        )
+        content = QWidget(self.surface)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(30, 24, 26, 28)
+        layout.setSpacing(15)
+
+        label = QLabel(heading, content)
+        label.setObjectName("dialogTitle")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        description = QLabel(detail, content)
+        description.setObjectName("dialogSubtitle")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        progress = QProgressBar(content)
+        progress.setObjectName("discoveryProgress")
+        progress.setRange(0, 0)
+        progress.setTextVisible(False)
+        layout.addWidget(progress)
+        layout.addStretch(1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Отмена", content)
+        cancel.setObjectName("secondaryButton")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+        self.surface_layout.addWidget(content, 1)
+
+
+class OnvifDiscoveryDialog(FramelessDialog):
+    """Список найденных устройств с выбором камер для добавления."""
+
+    def __init__(
+        self,
+        cameras: tuple[DiscoveredCamera, ...],
+        already_added_ips: set[str],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(
+            "Найденные камеры",
+            parent,
+            preferred_width=760,
+            preferred_height=650,
+        )
+        self._rows: list[tuple[QCheckBox, DiscoveredCamera]] = []
+
+        content = QWidget(self.surface)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(28, 16, 22, 26)
+        layout.setSpacing(14)
+
+        title = QLabel("Камеры в локальной сети", content)
+        title.setObjectName("dialogTitle")
+        layout.addWidget(title)
+        subtitle = QLabel(
+            "Выберите камеры, которые нужно разместить на доске. "
+            "Потоки, полученные через ONVIF, подключатся автоматически.",
+            content,
+        )
+        subtitle.setObjectName("dialogSubtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        scroll = QScrollArea(content)
+        scroll.setWidgetResizable(True)
+        rows_widget = QWidget(scroll)
+        rows_layout = QVBoxLayout(rows_widget)
+        rows_layout.setContentsMargins(2, 2, 8, 2)
+        rows_layout.setSpacing(9)
+        for camera in cameras:
+            duplicate = camera.ip in already_added_ips
+            row = QFrame(rows_widget)
+            row.setObjectName("discoveryRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(14, 10, 14, 10)
+            row_layout.setSpacing(14)
+
+            check = QCheckBox(camera.name.replace("&", "&&"), row)
+            check.setChecked(not duplicate)
+            check.setEnabled(not duplicate)
+            check.setMinimumWidth(210)
+            check.toggled.connect(self._sync_add_enabled)
+            row_layout.addWidget(check, 1)
+
+            address = QLabel(camera.ip, row)
+            address.setObjectName("discoveryAddress")
+            address.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            row_layout.addWidget(address)
+
+            status = QLabel(row)
+            if duplicate:
+                status.setText("●  Уже добавлена")
+                status.setStyleSheet(f"color: {TEXT_MUTED};")
+            elif camera.ready:
+                status.setText("●  Подключится сразу")
+                status.setStyleSheet(f"color: {SUCCESS};")
+            else:
+                status.setText("●  Нужен пароль")
+                status.setStyleSheet(f"color: {WARNING};")
+            status.setMinimumWidth(170)
+            row_layout.addWidget(status)
+            rows_layout.addWidget(row)
+            self._rows.append((check, camera))
+        rows_layout.addStretch(1)
+        scroll.setWidget(rows_widget)
+        layout.addWidget(scroll, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Отмена", content)
+        cancel.setObjectName("secondaryButton")
+        cancel.clicked.connect(self.reject)
+        self.add_button = QPushButton("Добавить выбранные", content)
+        self.add_button.setObjectName("primaryButton")
+        self.add_button.setDefault(True)
+        self.add_button.clicked.connect(self.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(self.add_button)
+        layout.addLayout(buttons)
+        self.surface_layout.addWidget(content, 1)
+        self._sync_add_enabled()
+
+    def _sync_add_enabled(self) -> None:
+        self.add_button.setEnabled(any(check.isChecked() for check, _ in self._rows))
+
+    def selected_cameras(self) -> tuple[DiscoveredCamera, ...]:
+        return tuple(camera for check, camera in self._rows if check.isChecked())
 
 
 class SettingsDialog(FramelessDialog):
