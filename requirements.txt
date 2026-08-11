@@ -1,0 +1,8 @@
+# Runtime
+PySide6>=6.7,<7
+opencv-python-headless>=4.10,<5
+
+# Сборка и генерация многоразмерной .ico
+PyInstaller>=6.10,<7
+Pillow>=10.4,<12
+

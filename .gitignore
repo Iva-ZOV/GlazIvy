@@ -1,0 +1,36 @@
+# --- Сборка и окружение (не выкладываем, всё регенерируется) ---
+.venv/
+venv/
+build/
+dist/
+release/
+*.spec.bak
+
+# Сгенерированная иконка (создаётся scripts/generate_icon.py при сборке)
+assets/app_icon.ico
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# --- Личное: настройки/данные камер сюда не должны попадать ---
+# (обычно лежат в %APPDATA%\GlazIvy, но на всякий случай)
+config.json
+config.json.bak
+*.log
+
+# --- Рабочие заметки/памятки с личными данными ---
+ПАМЯТКА*.txt
+BRIEF*.md
+ANSWERS.md
+REFERENCE.md
+COMPLAINT*.md
+_*.ps1
+_*.txt
+
+# --- ОС/редакторы ---
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
