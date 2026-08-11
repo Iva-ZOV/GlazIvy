@@ -29,8 +29,14 @@ from PySide6.QtWidgets import (
 from ..config import CameraConfig, CameraGeometry
 from ..constants import APP_NAME
 from .camera_tile import CameraTile
-from .theme import ACCENT, ACCENT_BLUE, TEXT, TEXT_MUTED
-from .widgets import LogoGlyph, SegmentedControl, ToolIconButton
+from .theme import BACKGROUND, BRONZE, KHAKI, TEXT, TEXT_MUTED
+from .widgets import (
+    LogoGlyph,
+    SegmentedControl,
+    ToolIconButton,
+    draw_grain,
+    set_heading_capitalization,
+)
 
 
 class BoardTitleBar(QWidget):
@@ -62,6 +68,7 @@ class BoardTitleBar(QWidget):
 
         title = QLabel(APP_NAME, self)
         title.setObjectName("appTitle")
+        set_heading_capitalization(title)
         layout.addWidget(title)
         self.subtitle = QLabel("Доска камер", self)
         self.subtitle.setObjectName("boardSubtitle")
@@ -568,26 +575,29 @@ class CameraBoard(QWidget):
             painter.setClipPath(clip)
 
         background = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        background.setColorAt(0.0, QColor("#0A0E14"))
-        background.setColorAt(0.52, QColor("#0D1119"))
-        background.setColorAt(1.0, QColor("#070A0F"))
+        background.setColorAt(0.0, QColor("#161711"))
+        background.setColorAt(0.52, QColor(BACKGROUND))
+        background.setColorAt(1.0, QColor("#0D0E0C"))
         painter.fillRect(rect, background)
 
-        painter.setPen(QPen(QColor(255, 255, 255, 7), 1))
+        line = QColor(BRONZE)
+        line.setAlpha(10)
+        painter.setPen(QPen(line, 1))
         spacing = max(58, int(min(self.width(), self.height()) / 9))
         for x in range(-self.height(), self.width() + self.height(), spacing):
             painter.drawLine(x, 0, x - self.height(), self.height())
 
         glow = QLinearGradient(0, 0, self.width(), self.height())
-        accent_blue = QColor(ACCENT_BLUE)
-        accent_blue.setAlpha(13)
-        accent = QColor(ACCENT)
-        accent.setAlpha(9)
+        bronze = QColor(BRONZE)
+        bronze.setAlpha(12)
+        khaki = QColor(KHAKI)
+        khaki.setAlpha(9)
         transparent = QColor(0, 0, 0, 0)
-        glow.setColorAt(0.0, accent_blue)
+        glow.setColorAt(0.0, bronze)
         glow.setColorAt(0.55, transparent)
-        glow.setColorAt(1.0, accent)
+        glow.setColorAt(1.0, khaki)
         painter.fillRect(rect, glow)
+        draw_grain(painter, rect, self.devicePixelRatioF(), opacity=0.20)
 
         if self._tiles:
             return

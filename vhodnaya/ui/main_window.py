@@ -33,7 +33,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
     QGraphicsOpacityEffect,
     QMessageBox,
     QVBoxLayout,
@@ -52,6 +51,7 @@ from .dialogs import (
     OnvifProgressDialog,
     SettingsDialog,
 )
+from .widgets import GrainFrame
 
 
 class _OnvifTaskSignals(QObject):
@@ -144,7 +144,7 @@ class MainWindow(QWidget):
             self.WINDOW_MARGIN,
             self.WINDOW_MARGIN,
         )
-        self.surface = QFrame(self)
+        self.surface = GrainFrame(self)
         self.surface.setObjectName("windowSurface")
         self.outer_layout.addWidget(self.surface)
 

@@ -4,6 +4,7 @@ venv/
 build/
 dist/
 release/
+_probe/
 *.spec.bak
 
 # Сгенерированная иконка (создаётся scripts/generate_icon.py при сборке)

@@ -24,7 +24,12 @@ from ..onvif import DiscoveredCamera
 from ..resources import application_icon
 from .forms import CameraForm
 from .theme import SUCCESS, TEXT_MUTED, WARNING
-from .widgets import LogoGlyph, ToolIconButton
+from .widgets import (
+    GrainFrame,
+    LogoGlyph,
+    ToolIconButton,
+    set_heading_capitalization,
+)
 
 
 class DialogHeader(QWidget):
@@ -39,6 +44,7 @@ class DialogHeader(QWidget):
         layout.addWidget(LogoGlyph(25, self))
         label = QLabel(title, self)
         label.setObjectName("appTitle")
+        set_heading_capitalization(label)
         layout.addWidget(label)
         layout.addStretch(1)
         close_button = ToolIconButton("close", "Закрыть", self)
@@ -82,7 +88,7 @@ class FramelessDialog(QDialog):
 
         self.outer_layout = QVBoxLayout(self)
         self.outer_layout.setContentsMargins(18, 18, 18, 18)
-        self.surface = QFrame(self)
+        self.surface = GrainFrame(self)
         self.surface.setObjectName("dialogSurface")
         self.outer_layout.addWidget(self.surface)
 
@@ -141,6 +147,7 @@ class OnvifProgressDialog(FramelessDialog):
 
         label = QLabel(heading, content)
         label.setObjectName("dialogTitle")
+        set_heading_capitalization(label)
         label.setWordWrap(True)
         layout.addWidget(label)
         description = QLabel(detail, content)
@@ -189,6 +196,7 @@ class OnvifDiscoveryDialog(FramelessDialog):
 
         title = QLabel("Камеры в локальной сети", content)
         title.setObjectName("dialogTitle")
+        set_heading_capitalization(title)
         layout.addWidget(title)
         subtitle = QLabel(
             "Выберите камеры, которые нужно разместить на доске. "
@@ -287,6 +295,7 @@ class SettingsDialog(FramelessDialog):
 
         title = QLabel("Параметры камеры", content)
         title.setObjectName("dialogTitle")
+        set_heading_capitalization(title)
         content_layout.addWidget(title)
         subtitle = QLabel(
             "Изменения адреса, транспорта или потока применятся сразу после сохранения.",
@@ -351,6 +360,7 @@ class BoardSettingsDialog(FramelessDialog):
 
         title = QLabel("Доска камер", content)
         title.setObjectName("dialogTitle")
+        set_heading_capitalization(title)
         layout.addWidget(title)
         subtitle = QLabel(
             "Положение, размер и порядок плиток сохраняются автоматически.",

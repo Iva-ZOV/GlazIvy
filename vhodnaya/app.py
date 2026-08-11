@@ -20,6 +20,7 @@ from .constants import APP_NAME, APP_VERSION, ORGANIZATION_NAME  # noqa: E402
 from .resources import (  # noqa: E402
     application_icon,
     default_font,
+    heading_family,
     install_application_fonts,
 )
 from .ui.main_window import MainWindow  # noqa: E402
@@ -52,7 +53,7 @@ def run() -> int:
     font_family = install_application_fonts()
     app.setFont(default_font(font_family))
     app.setStyle("Fusion")
-    app.setStyleSheet(stylesheet(font_family))
+    app.setStyleSheet(stylesheet(font_family, heading_family()))
 
     store = ConfigStore()
     config = AppConfig()

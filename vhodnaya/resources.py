@@ -8,6 +8,10 @@ from pathlib import Path
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 
 
+_body_family = ""
+_heading_family = ""
+
+
 def project_root() -> Path:
     bundle_root = getattr(sys, "_MEIPASS", None)
     if bundle_root:
@@ -20,16 +24,21 @@ def resource_path(*parts: str) -> Path:
 
 
 def application_icon() -> QIcon:
-    """ICO используется в сборке, SVG — удобный fallback из исходников."""
+    """ICO используется в сборке, новый PNG — fallback из исходников."""
 
     ico = resource_path("assets", "app_icon.ico")
     if ico.exists():
         return QIcon(str(ico))
-    return QIcon(str(resource_path("assets", "app_icon.svg")))
+    source = resource_path("assets", "app_icon_source.png")
+    if source.exists():
+        return QIcon(str(source))
+    return QIcon()
 
 
 def install_application_fonts() -> str:
-    """Подключает вложенный Inter, если TTF добавлены, иначе системный аналог."""
+    """Регистрирует все вложенные TTF и возвращает семейство основного текста."""
+
+    global _body_family, _heading_family
 
     font_dir = resource_path("assets", "fonts")
     loaded_families: list[str] = []
@@ -39,14 +48,39 @@ def install_application_fonts() -> str:
             if font_id >= 0:
                 loaded_families.extend(QFontDatabase.applicationFontFamilies(font_id))
 
+    available = QFontDatabase.families()
     inter_family = next(
+        (name for name in loaded_families if name.casefold() == "inter"),
+        None,
+    ) or next(
         (name for name in loaded_families if name.casefold().startswith("inter")),
         None,
     )
-    family = inter_family or "Segoe UI Variable Text"
-    if family not in QFontDatabase.families():
-        family = "Segoe UI"
-    return family
+    unbounded_family = next(
+        (name for name in loaded_families if name.casefold() == "unbounded"),
+        None,
+    ) or next(
+        (name for name in loaded_families if name.casefold().startswith("unbounded")),
+        None,
+    )
+
+    _body_family = inter_family or "Segoe UI Variable Text"
+    if _body_family not in available:
+        _body_family = "Segoe UI"
+    _heading_family = unbounded_family or _body_family
+    return _body_family
+
+
+def body_family() -> str:
+    """Возвращает выбранное семейство основного текста после установки TTF."""
+
+    return _body_family or "Segoe UI"
+
+
+def heading_family() -> str:
+    """Возвращает Unbounded, а при недоступности — основной шрифт."""
+
+    return _heading_family or body_family()
 
 
 def default_font(family: str) -> QFont:

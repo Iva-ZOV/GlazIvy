@@ -26,9 +26,11 @@ from PySide6.QtGui import (
     QPainterPath,
     QPaintEvent,
     QPen,
+    QPixmap,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
@@ -36,7 +38,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import ACCENT, ACCENT_BLUE, DANGER, SUCCESS, TEXT, TEXT_MUTED, WARNING
+from ..resources import resource_path
+from .theme import (
+    BACKGROUND,
+    BRONZE,
+    DANGER,
+    KHAKI,
+    PRIMARY,
+    PRIMARY_PRESSED,
+    SUCCESS,
+    SURFACE,
+    TEXT,
+    TEXT_MUTED,
+    WARNING,
+)
 
 
 def _color(value: str, alpha: int | None = None) -> QColor:
@@ -46,8 +61,106 @@ def _color(value: str, alpha: int | None = None) -> QColor:
     return color
 
 
+_logo_source: QPixmap | None = None
+_logo_cache: dict[tuple[int, int, int], QPixmap] = {}
+_grain_source: QPixmap | None = None
+_grain_cache: dict[int, QPixmap] = {}
+
+
+def set_heading_capitalization(label: QLabel) -> None:
+    """Делает фирменный заголовок капсом, не меняя исходную строку."""
+
+    font = QFont(label.font())
+    font.setCapitalization(QFont.Capitalization.AllUppercase)
+    label.setFont(font)
+
+
+def _logo_pixmap(size: QSize, dpr: float) -> QPixmap | None:
+    global _logo_source
+    if _logo_source is None:
+        _logo_source = QPixmap(str(resource_path("assets", "app_icon_source.png")))
+    if _logo_source.isNull():
+        return None
+
+    ratio_key = max(100, round(dpr * 100))
+    pixel_width = max(1, round(size.width() * dpr))
+    pixel_height = max(1, round(size.height() * dpr))
+    key = (pixel_width, pixel_height, ratio_key)
+    cached = _logo_cache.get(key)
+    if cached is not None:
+        return cached
+
+    scaled = _logo_source.scaled(
+        pixel_width,
+        pixel_height,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+    _logo_cache[key] = scaled
+    return scaled
+
+
+def _grain_pixmap(dpr: float) -> QPixmap | None:
+    global _grain_source
+    if _grain_source is None:
+        _grain_source = QPixmap(str(resource_path("assets", "textures", "grain.png")))
+    if _grain_source.isNull():
+        return None
+
+    ratio_key = max(100, round(dpr * 100))
+    cached = _grain_cache.get(ratio_key)
+    if cached is not None:
+        return cached
+
+    scaled = _grain_source.scaled(
+        max(1, round(_grain_source.width() * dpr)),
+        max(1, round(_grain_source.height() * dpr)),
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.FastTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+    _grain_cache[ratio_key] = scaled
+    return scaled
+
+
+def draw_grain(
+    painter: QPainter,
+    rect: QRectF,
+    dpr: float,
+    *,
+    opacity: float = 0.20,
+) -> None:
+    """Рисует лёгкое кэшированное зерно на уже окрашенной статичной поверхности."""
+
+    texture = _grain_pixmap(dpr)
+    if texture is None:
+        return
+    painter.save()
+    painter.setOpacity(opacity)
+    painter.drawTiledPixmap(rect, texture)
+    painter.restore()
+
+
+class GrainFrame(QFrame):
+    """QSS-поверхность окна/диалога с процедурным зерном внутри скругления."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
+        radius = 0.0 if self.property("flat") else 21.0
+        if radius > 0.0:
+            clip = QPainterPath()
+            clip.setFillRule(Qt.FillRule.WindingFill)
+            clip.addRoundedRect(rect, radius, radius)
+            painter.setClipPath(clip)
+        draw_grain(painter, rect, self.devicePixelRatioF(), opacity=0.18)
+
+
 class LogoGlyph(QWidget):
-    """Минималистичная камера/объектив без зависимости от иконочного шрифта."""
+    """Растровый логотип-котик с векторным fallback без внешнего шрифта."""
 
     def __init__(self, size: int = 28, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -57,19 +170,32 @@ class LogoGlyph(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        pixmap = _logo_pixmap(self.size(), self.devicePixelRatioF())
+        if pixmap is not None:
+            logical_size = pixmap.deviceIndependentSize()
+            painter.drawPixmap(
+                QPointF(
+                    (self.width() - logical_size.width()) / 2,
+                    (self.height() - logical_size.height()) / 2,
+                ),
+                pixmap,
+            )
+            return
+
         rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
         gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        gradient.setColorAt(0.0, _color(ACCENT_BLUE))
-        gradient.setColorAt(1.0, _color(ACCENT))
+        gradient.setColorAt(0.0, _color(BRONZE))
+        gradient.setColorAt(1.0, _color(PRIMARY))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(gradient)
         painter.drawRoundedRect(rect, rect.width() * 0.29, rect.height() * 0.29)
 
         center = rect.center()
         radius = rect.width() * 0.24
-        painter.setBrush(_color("#091017", 230))
+        painter.setBrush(_color(BACKGROUND, 235))
         painter.drawEllipse(center, radius, radius)
-        painter.setBrush(_color("#D8FFF8", 225))
+        painter.setBrush(_color(TEXT, 225))
         painter.drawEllipse(
             QPointF(center.x() - radius * 0.25, center.y() - radius * 0.25),
             radius * 0.27,
@@ -78,7 +204,7 @@ class LogoGlyph(QWidget):
 
 
 class ToolIconButton(QAbstractButton):
-    """Кнопка заголовка с векторным глифом и мягким hover."""
+    """Кнопка заголовка с бронзовым глифом и красным опасным состоянием."""
 
     def __init__(
         self,
@@ -131,17 +257,21 @@ class ToolIconButton(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        alpha = int(9 + 24 * self._hover)
-        if self.isDown():
-            alpha = 48
-        background = _color(DANGER if self.kind == "close" else "#FFFFFF", alpha)
+        if self.kind == "close":
+            background = _color(PRIMARY, int(8 + 50 * self._hover))
+            if self.isDown():
+                background = _color(PRIMARY_PRESSED, 230)
+        else:
+            background = _color(BRONZE, int(5 + 24 * self._hover))
+            if self.isDown():
+                background = _color(BRONZE, 42)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(background)
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 9, 9)
 
-        glyph = _color("#FFFFFF", int(150 + 90 * max(self._hover, 0.15)))
+        glyph = _color(BRONZE, int(185 + 65 * self._hover))
         if self.kind == "close" and self._hover > 0.01:
-            glyph = _color("#FFABB1")
+            glyph = _color(TEXT)
         pen = QPen(glyph, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -267,8 +397,8 @@ class SegmentedControl(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         outer = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        painter.setPen(QPen(_color("#FFFFFF", 22), 1))
-        painter.setBrush(_color("#05080D", 125))
+        painter.setPen(QPen(_color(BRONZE, 70), 1))
+        painter.setBrush(_color(BACKGROUND, 185))
         painter.drawRoundedRect(outer, 10, 10)
 
         segment_width = outer.width() / len(self.values)
@@ -279,9 +409,9 @@ class SegmentedControl(QWidget):
             outer.height() - 5,
         )
         gradient = QLinearGradient(slider.topLeft(), slider.bottomRight())
-        gradient.setColorAt(0.0, _color("#313A48", 245))
-        gradient.setColorAt(1.0, _color("#222A35", 245))
-        painter.setPen(QPen(_color("#FFFFFF", 30), 1))
+        gradient.setColorAt(0.0, _color(PRIMARY, 238))
+        gradient.setColorAt(1.0, _color(PRIMARY_PRESSED, 242))
+        painter.setPen(QPen(_color(BRONZE, 82), 1))
         painter.setBrush(gradient)
         painter.drawRoundedRect(slider, 8, 8)
 
@@ -297,24 +427,27 @@ class SegmentedControl(QWidget):
                 outer.height(),
             )
             distance = abs(self._position - index)
-            alpha = int(238 - min(1.0, distance) * 105)
-            painter.setPen(_color(TEXT, alpha))
+            if distance < 0.5:
+                painter.setPen(_color(TEXT, 248))
+            else:
+                painter.setPen(_color(BRONZE, 205))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
         if self.hasFocus():
-            painter.setPen(QPen(_color(ACCENT, 120), 1))
+            painter.setPen(QPen(_color(KHAKI, 205), 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(outer.adjusted(1, 1, -1, -1), 9, 9)
 
 
 class StatusPill(QWidget):
     _STATE = {
-        "unconfigured": ("Не настроена", TEXT_MUTED),
-        "connecting": ("Подключение…", ACCENT_BLUE),
+        "unconfigured": ("Не настроена", BRONZE),
+        "connecting": ("Подключение…", WARNING),
         "online": ("В сети", SUCCESS),
         "reconnecting": ("Переподключение…", WARNING),
         "offline": ("Нет связи", DANGER),
     }
+    _PULSING_STATES = {"connecting", "reconnecting"}
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -333,7 +466,7 @@ class StatusPill(QWidget):
 
     def _set_pulse(self, value: object) -> None:
         self._pulse = float(value)
-        if self._state != "online":
+        if self._state in self._PULSING_STATES:
             self.update()
 
     def set_state(self, state: str) -> None:
@@ -356,12 +489,15 @@ class StatusPill(QWidget):
         text, color_name = self._STATE[self._state]
         color = _color(color_name)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 42), 1))
-        painter.setBrush(QColor(color.red(), color.green(), color.blue(), 15))
+        painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 82), 1))
+        painter.setBrush(_color(BACKGROUND, 224))
         painter.drawRoundedRect(rect, 13.5, 13.5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color.red(), color.green(), color.blue(), 25))
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 12.5, 12.5)
 
         dot_center = QPointF(14, rect.center().y())
-        if self._state != "online":
+        if self._state in self._PULSING_STATES:
             pulse_radius = 4.5 + 3.2 * self._pulse
             pulse_alpha = int(70 * (1.0 - self._pulse))
             painter.setPen(Qt.PenStyle.NoPen)
@@ -375,7 +511,7 @@ class StatusPill(QWidget):
         font.setPixelSize(11)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
-        painter.setPen(QColor(color.red(), color.green(), color.blue(), 235))
+        painter.setPen(_color(TEXT, 245))
         painter.drawText(
             QRectF(25, 0, self.width() - 31, self.height()),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -452,34 +588,34 @@ class VideoCanvas(QWidget):
     def _draw_background(self, painter: QPainter) -> None:
         rect = QRectF(self.rect())
         gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        gradient.setColorAt(0.0, _color("#0A0E14"))
-        gradient.setColorAt(0.5, _color("#0D1119"))
-        gradient.setColorAt(1.0, _color("#070A0F"))
+        gradient.setColorAt(0.0, _color("#151610"))
+        gradient.setColorAt(0.5, _color(BACKGROUND))
+        gradient.setColorAt(1.0, _color("#0D0E0C"))
         painter.fillRect(rect, gradient)
 
-        painter.setPen(QPen(_color("#FFFFFF", 7), 1))
+        painter.setPen(QPen(_color(BRONZE, 11), 1))
         spacing = max(54, int(min(self.width(), self.height()) / 9))
         for x in range(-self.height(), self.width() + self.height(), spacing):
             painter.drawLine(x, 0, x - self.height(), self.height())
 
         glow = QLinearGradient(0, 0, self.width(), self.height())
-        glow.setColorAt(0.0, _color(ACCENT_BLUE, 12))
+        glow.setColorAt(0.0, _color(BRONZE, 12))
         glow.setColorAt(0.55, _color("#000000", 0))
-        glow.setColorAt(1.0, _color(ACCENT, 9))
+        glow.setColorAt(1.0, _color(KHAKI, 10))
         painter.fillRect(rect, glow)
 
     def _draw_placeholder(self, painter: QPainter) -> None:
         center = QPointF(self.width() / 2, self.height() / 2 - 16)
-        painter.setPen(QPen(_color("#FFFFFF", 38), 1.6))
-        painter.setBrush(_color("#FFFFFF", 6))
+        painter.setPen(QPen(_color(BRONZE, 88), 1.6))
+        painter.setBrush(_color(BRONZE, 12))
         painter.drawRoundedRect(
             QRectF(center.x() - 29, center.y() - 22, 58, 44),
             13,
             13,
         )
-        painter.setBrush(_color(ACCENT_BLUE, 38))
+        painter.setBrush(_color(KHAKI, 52))
         painter.drawEllipse(center, 12, 12)
-        painter.setBrush(_color("#071019", 220))
+        painter.setBrush(_color(BACKGROUND, 235))
         painter.drawEllipse(center, 6, 6)
 
     def _draw_frame(self, painter: QPainter) -> None:
@@ -513,7 +649,7 @@ class VideoCanvas(QWidget):
         painter.setOpacity(self._overlay_opacity)
 
         if self._frame is not None:
-            painter.fillRect(self.rect(), _color("#04070B", 58))
+            painter.fillRect(self.rect(), _color(BACKGROUND, 72))
 
         primary = {
             "unconfigured": "Камера не настроена",
@@ -532,8 +668,8 @@ class VideoCanvas(QWidget):
         if self._frame is not None:
             card.moveCenter(QPointF(self.width() / 2, self.height() / 2))
 
-        painter.setPen(QPen(_color("#FFFFFF", 22), 1))
-        painter.setBrush(_color("#10161E", 224))
+        painter.setPen(QPen(_color(BRONZE, 76), 1))
+        painter.setBrush(_color(SURFACE, 238))
         painter.drawRoundedRect(card, 16, 16)
 
         title_font = QFont(self.font())

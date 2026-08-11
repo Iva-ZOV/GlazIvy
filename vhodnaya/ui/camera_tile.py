@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from ..config import CameraConfig, CameraGeometry, ConfigError
 from ..video import CameraReader
-from .theme import ACCENT, SURFACE_RAISED
+from .theme import BRONZE, SURFACE_RAISED
 from .widgets import (
     LogoGlyph,
     SegmentedControl,
@@ -769,13 +769,15 @@ class CameraTile(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        painter.setPen(QPen(QColor(255, 255, 255, 38), 1))
+        border = QColor(BRONZE)
+        border.setAlpha(82)
+        painter.setPen(QPen(border, 1))
         painter.setBrush(QColor(SURFACE_RAISED))
         radius = 0.0 if self._expanded else 18.0
         painter.drawRoundedRect(rect, radius, radius)
 
         if self._highlight_opacity > 0.01 and not self._expanded:
-            accent = QColor(ACCENT)
+            accent = QColor(BRONZE)
             accent.setAlpha(int(225 * self._highlight_opacity))
             painter.setPen(QPen(accent, 1.25))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -787,7 +789,9 @@ class CameraTile(QWidget):
 
         # Ненавязчивый маркер правого нижнего угла подсказывает про ресайз.
         if self._layout_interaction_enabled:
-            painter.setPen(QPen(QColor(255, 255, 255, 55), 1.2))
+            marker = QColor(BRONZE)
+            marker.setAlpha(90)
+            painter.setPen(QPen(marker, 1.2))
             for offset in (7, 11):
                 painter.drawLine(
                     self.width() - offset,
