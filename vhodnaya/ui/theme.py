@@ -44,16 +44,16 @@ def stylesheet(font_family: str) -> str:
         border: none;
     }}
 
+    QWidget#titleBar[floating="true"] {{
+        background-color: rgba(8, 11, 16, 220);
+        border: 1px solid rgba(255, 255, 255, 28);
+        border-radius: 15px;
+    }}
+
     QWidget#cameraTileHeader {{
         background-color: rgba(8, 11, 16, 218);
         border: 1px solid rgba(255, 255, 255, 28);
         border-radius: 17px;
-    }}
-
-    QWidget#fullscreenOverlay {{
-        background-color: rgba(8, 11, 16, 220);
-        border: 1px solid rgba(255, 255, 255, 28);
-        border-radius: 15px;
     }}
 
     QLabel#appTitle {{

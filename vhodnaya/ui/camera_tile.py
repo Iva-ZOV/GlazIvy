@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QRectF,
     QTimer,
     Qt,
+    QVariantAnimation,
     Signal,
 )
 from PySide6.QtGui import (
@@ -35,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from ..config import CameraConfig, CameraGeometry, ConfigError
 from ..video import CameraReader
-from .theme import SURFACE_RAISED
+from .theme import ACCENT, SURFACE_RAISED
 from .widgets import (
     LogoGlyph,
     SegmentedControl,
@@ -52,6 +53,7 @@ class CameraTile(QWidget):
     layout_changed = Signal(str)
     settings_requested = Signal(str)
     quick_change_requested = Signal(str, str, str)
+    expand_requested = Signal(str)
 
     MINIMUM_WIDTH = 520
     MINIMUM_HEIGHT = 320
@@ -73,15 +75,18 @@ class CameraTile(QWidget):
         self._drag_targets: set[QWidget] = set()
         self._header_target_visible = False
         self._information_overlays_target_visible = True
+        self._layout_interaction_enabled = True
+        self._expanded = False
+        self._highlight_opacity = 0.0
 
         self.setObjectName("cameraTile")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(self.MINIMUM_WIDTH, self.MINIMUM_HEIGHT)
         self.setMouseTracking(True)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(1, 1, 1, 1)
-        root.setSpacing(0)
+        self._root_layout = QVBoxLayout(self)
+        self._root_layout.setContentsMargins(1, 1, 1, 1)
+        self._root_layout.setSpacing(0)
 
         self.header = QWidget(self)
         self.header.setObjectName("cameraTileHeader")
@@ -145,12 +150,17 @@ class CameraTile(QWidget):
         self._header_idle_timer.setInterval(self.HEADER_IDLE_TIMEOUT_MS)
         self._header_idle_timer.timeout.connect(self._header_idle_timeout)
 
+        self._highlight_animation = QVariantAnimation(self)
+        self._highlight_animation.setDuration(150)
+        self._highlight_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._highlight_animation.valueChanged.connect(self._set_highlight_opacity)
+
         # VideoCanvas занимает всю плитку, а шапка и индикаторы лежат поверх него.
         self.video = VideoCanvas(self)
         self.video.setMinimumSize(0, 0)
         self.video.unsetCursor()
         self.video.set_corner_radius(17.0)
-        root.addWidget(self.video, 1)
+        self._root_layout.addWidget(self.video, 1)
 
         self.clock_label = QLabel(self.video)
         self.clock_label.setObjectName("tileClock")
@@ -320,6 +330,7 @@ class CameraTile(QWidget):
     def _set_header_visible(self, visible: bool, *, animate: bool = True) -> None:
         if not visible and self._interaction is not None:
             return
+        self._set_highlight_visible(visible and not self._expanded, animate=animate)
         if visible == self._header_target_visible:
             if visible:
                 self.header.raise_()
@@ -344,6 +355,20 @@ class CameraTile(QWidget):
         self._header_animation.setStartValue(self._header_effect.opacity())
         self._header_animation.setEndValue(target_opacity)
         self._header_animation.start()
+
+    def _set_highlight_visible(self, visible: bool, *, animate: bool = True) -> None:
+        target_opacity = 1.0 if visible else 0.0
+        self._highlight_animation.stop()
+        if not animate or abs(self._highlight_opacity - target_opacity) < 0.01:
+            self._set_highlight_opacity(target_opacity)
+            return
+        self._highlight_animation.setStartValue(self._highlight_opacity)
+        self._highlight_animation.setEndValue(target_opacity)
+        self._highlight_animation.start()
+
+    def _set_highlight_opacity(self, value: object) -> None:
+        self._highlight_opacity = float(value)
+        self.update()
 
     def _header_animation_finished(self) -> None:
         if self._header_target_visible:
@@ -388,7 +413,11 @@ class CameraTile(QWidget):
             if mouse_event.button() == Qt.MouseButton.LeftButton:  # type: ignore[attr-defined]
                 position = self._event_position(mouse_event)  # type: ignore[arg-type]
                 self.raise_requested.emit(self.config.camera_id)
-                edges = self._resize_edges(position)
+                edges = (
+                    self._resize_edges(position)
+                    if self._layout_interaction_enabled
+                    else Qt.Edge(0)
+                )
                 if edges:
                     self._begin_interaction(
                         "resize",
@@ -396,7 +425,7 @@ class CameraTile(QWidget):
                         edges,
                     )
                     return True
-                if watched in self._drag_targets:
+                if self._layout_interaction_enabled and watched in self._drag_targets:
                     self._begin_interaction(
                         "move",
                         mouse_event.globalPosition().toPoint(),  # type: ignore[attr-defined]
@@ -410,9 +439,12 @@ class CameraTile(QWidget):
                     mouse_event.globalPosition().toPoint()  # type: ignore[attr-defined]
                 )
                 return True
-            self._update_resize_cursor(
-                self._resize_edges(self._event_position(mouse_event))  # type: ignore[arg-type]
-            )
+            if self._layout_interaction_enabled:
+                self._update_resize_cursor(
+                    self._resize_edges(self._event_position(mouse_event))  # type: ignore[arg-type]
+                )
+            else:
+                self.unsetCursor()
 
         elif event_type == QEvent.Type.MouseButtonRelease:
             mouse_event = event  # type: ignore[assignment]
@@ -431,6 +463,8 @@ class CameraTile(QWidget):
         return super().eventFilter(watched, event)
 
     def _resize_edges(self, position: QPoint) -> Qt.Edge:
+        if not self._layout_interaction_enabled:
+            return Qt.Edge(0)
         margin = self.RESIZE_MARGIN
         edges = Qt.Edge(0)
         if position.x() <= margin:
@@ -469,6 +503,8 @@ class CameraTile(QWidget):
         global_position: QPoint,
         edges: Qt.Edge = Qt.Edge(0),
     ) -> None:
+        if not self._layout_interaction_enabled:
+            return
         self._set_header_visible(True)
         self._interaction = mode
         self._resize_edges_value = edges
@@ -537,6 +573,35 @@ class CameraTile(QWidget):
         self.setGeometry(x, y, width, height)
         return self.geometry() != before
 
+    def set_layout_interaction_enabled(self, enabled: bool) -> None:
+        if enabled == self._layout_interaction_enabled:
+            return
+        self._layout_interaction_enabled = enabled
+        if not enabled and self._interaction is not None:
+            self._interaction = None
+            self._resize_edges_value = Qt.Edge(0)
+            self.releaseMouse()
+        self.unsetCursor()
+        if enabled:
+            self.setMinimumSize(self.MINIMUM_WIDTH, self.MINIMUM_HEIGHT)
+        else:
+            self.setMinimumSize(0, 0)
+        self.update()
+
+    def set_expanded(self, expanded: bool) -> None:
+        if expanded == self._expanded:
+            return
+        self._expanded = expanded
+        margin = 0 if expanded else 1
+        self._root_layout.setContentsMargins(margin, margin, margin, margin)
+        self.video.set_corner_radius(0.0 if expanded else 17.0)
+        if expanded:
+            self._set_highlight_visible(False)
+        elif self._header_target_visible:
+            self._set_highlight_visible(True)
+        self._position_overlays()
+        self.update()
+
     def snapshot_config(
         self,
         z_index: int,
@@ -598,6 +663,8 @@ class CameraTile(QWidget):
     def _video_double_clicked(self) -> None:
         if not self.config.is_configured():
             self.settings_requested.emit(self.config.camera_id)
+            return
+        self.expand_requested.emit(self.config.camera_id)
 
     def _set_status_state(self, state: str) -> None:
         self.status.set_state(state)
@@ -704,17 +771,30 @@ class CameraTile(QWidget):
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         painter.setPen(QPen(QColor(255, 255, 255, 38), 1))
         painter.setBrush(QColor(SURFACE_RAISED))
-        painter.drawRoundedRect(rect, 18, 18)
+        radius = 0.0 if self._expanded else 18.0
+        painter.drawRoundedRect(rect, radius, radius)
+
+        if self._highlight_opacity > 0.01 and not self._expanded:
+            accent = QColor(ACCENT)
+            accent.setAlpha(int(225 * self._highlight_opacity))
+            painter.setPen(QPen(accent, 1.25))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75),
+                17.5,
+                17.5,
+            )
 
         # Ненавязчивый маркер правого нижнего угла подсказывает про ресайз.
-        painter.setPen(QPen(QColor(255, 255, 255, 55), 1.2))
-        for offset in (7, 11):
-            painter.drawLine(
-                self.width() - offset,
-                self.height() - 3,
-                self.width() - 3,
-                self.height() - offset,
-            )
+        if self._layout_interaction_enabled:
+            painter.setPen(QPen(QColor(255, 255, 255, 55), 1.2))
+            for offset in (7, 11):
+                painter.drawLine(
+                    self.width() - offset,
+                    self.height() - 3,
+                    self.width() - 3,
+                    self.height() - offset,
+                )
 
     def shutdown(self) -> None:
         if self._shutting_down:
@@ -723,6 +803,7 @@ class CameraTile(QWidget):
         self._generation += 1
         self._header_idle_timer.stop()
         self._header_animation.stop()
+        self._highlight_animation.stop()
         self._status_animation.stop()
         self._clock_animation.stop()
         self._clock_timer.stop()

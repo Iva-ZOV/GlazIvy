@@ -25,6 +25,7 @@ from .constants import (
 )
 
 CONFIG_VERSION = 2
+LAYOUT_MODES = {"free", "grid"}
 
 
 class ConfigError(ValueError):
@@ -221,6 +222,7 @@ class AppConfig:
 
     cameras: tuple[CameraConfig, ...] = field(default_factory=tuple)
     autostart: bool = False
+    layout_mode: str = "free"
 
     def updated(self, **changes: Any) -> "AppConfig":
         return replace(self, **changes)
@@ -228,6 +230,8 @@ class AppConfig:
     def validate(self) -> None:
         if not isinstance(self.autostart, bool):
             raise ConfigError("Параметр автозапуска должен быть логическим.")
+        if self.layout_mode not in LAYOUT_MODES:
+            raise ConfigError("Режим раскладки должен быть свободным или сеточным.")
         seen_ids: set[str] = set()
         for camera in self.cameras:
             if not isinstance(camera, CameraConfig):
@@ -399,6 +403,7 @@ class ConfigStore:
         config = AppConfig(
             cameras=cameras,
             autostart=_read_bool(payload, "autostart", False),
+            layout_mode=str(payload.get("layout_mode", "free")).lower(),
         )
         config.validate()
         return config
@@ -438,6 +443,7 @@ class ConfigStore:
         data = {
             "config_version": CONFIG_VERSION,
             "autostart": config.autostart,
+            "layout_mode": config.layout_mode,
             "cameras": [self._camera_payload(camera) for camera in config.cameras],
         }
 

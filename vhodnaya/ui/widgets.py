@@ -101,6 +101,13 @@ class ToolIconButton(QAbstractButton):
     def sizeHint(self) -> QSize:
         return QSize(34, 34)
 
+    def set_kind(self, kind: str, tooltip: str | None = None) -> None:
+        if kind != self.kind:
+            self.kind = kind
+            self.update()
+        if tooltip is not None:
+            self.setToolTip(tooltip)
+
     def _set_hover(self, value: object) -> None:
         self._hover = float(value)
         self.update()
@@ -221,6 +228,15 @@ class SegmentedControl(QWidget):
     def _set_position(self, value: object) -> None:
         self._position = float(value)
         self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        # Нажатие обязаны принять сами: иначе оно всплывёт к родителю, а
+        # заголовок доски на нём начинает перетаскивание окна и перехватывает
+        # мышь — отпускание до нас уже не доходит, переключатель не срабатывает.
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

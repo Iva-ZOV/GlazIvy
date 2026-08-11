@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsOpacityEffect,
-    QHBoxLayout,
     QMessageBox,
     QVBoxLayout,
     QWidget,
@@ -53,7 +52,6 @@ from .dialogs import (
     OnvifProgressDialog,
     SettingsDialog,
 )
-from .widgets import ToolIconButton
 
 
 class _OnvifTaskSignals(QObject):
@@ -99,9 +97,7 @@ class _OnvifTask:
 class MainWindow(QWidget):
     RESIZE_MARGIN = 11
     WINDOW_MARGIN = 18
-    FULLSCREEN_OVERLAY_WIDTH = 150
-    FULLSCREEN_OVERLAY_HEIGHT = 54
-    FULLSCREEN_OVERLAY_MARGIN = 10
+    FULLSCREEN_TITLE_MARGIN = 10
 
     def __init__(
         self,
@@ -121,9 +117,10 @@ class MainWindow(QWidget):
         self._onvif_cancelled = False
         self._onvif_success_callback: Callable[[object], None] | None = None
         self._onvif_failure_callback: Callable[[], None] | None = None
-        self._fullscreen_overlay_target_visible = False
+        self._fullscreen_title_target_visible = False
         self._fullscreen_cursor_hidden = False
         self._application_event_filter_installed = False
+        self._title_bar_floating = False
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(application_icon())
@@ -151,78 +148,49 @@ class MainWindow(QWidget):
         self.surface.setObjectName("windowSurface")
         self.outer_layout.addWidget(self.surface)
 
-        surface_layout = QVBoxLayout(self.surface)
-        surface_layout.setContentsMargins(0, 0, 0, 0)
-        surface_layout.setSpacing(0)
+        self.surface_layout = QVBoxLayout(self.surface)
+        self.surface_layout.setContentsMargins(0, 0, 0, 0)
+        self.surface_layout.setSpacing(0)
 
-        self.title_bar = BoardTitleBar(self.surface)
-        surface_layout.addWidget(self.title_bar)
-        self.board = CameraBoard(config.cameras, self.surface)
-        surface_layout.addWidget(self.board, 1)
+        self.title_bar = BoardTitleBar(
+            self.surface,
+            layout_mode=config.layout_mode,
+        )
+        self.surface_layout.addWidget(self.title_bar)
+        self.board = CameraBoard(
+            config.cameras,
+            self.surface,
+            layout_mode=config.layout_mode,
+        )
+        self.surface_layout.addWidget(self.board, 1)
         self.title_bar.set_camera_count(self.board.camera_count())
         self.title_bar.set_compact(self.width() < 1080)
 
-        self.fullscreen_overlay = QWidget(self)
-        self.fullscreen_overlay.setObjectName("fullscreenOverlay")
-        self.fullscreen_overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
-        self.fullscreen_overlay.setFixedHeight(self.FULLSCREEN_OVERLAY_HEIGHT)
-        self.fullscreen_overlay.setMouseTracking(True)
-        fullscreen_layout = QHBoxLayout(self.fullscreen_overlay)
-        fullscreen_layout.setContentsMargins(12, 10, 12, 10)
-        fullscreen_layout.setSpacing(6)
-        fullscreen_layout.addStretch(1)
-        self.fullscreen_minimize_button = ToolIconButton(
-            "minimize",
-            "Свернуть",
-            self.fullscreen_overlay,
-        )
-        self.fullscreen_windowed_button = ToolIconButton(
-            "windowed",
-            "Оконный режим",
-            self.fullscreen_overlay,
-        )
-        self.fullscreen_close_button = ToolIconButton(
-            "close",
-            "Закрыть",
-            self.fullscreen_overlay,
-        )
-        for button in (
-            self.fullscreen_minimize_button,
-            self.fullscreen_windowed_button,
-            self.fullscreen_close_button,
-        ):
-            fullscreen_layout.addWidget(button)
-
-        self._fullscreen_overlay_effect = QGraphicsOpacityEffect(
-            self.fullscreen_overlay
-        )
-        self._fullscreen_overlay_effect.setOpacity(0.0)
-        self.fullscreen_overlay.setGraphicsEffect(self._fullscreen_overlay_effect)
-        self._fullscreen_overlay_animation = QPropertyAnimation(
-            self._fullscreen_overlay_effect,
+        # Эффект висит только на панели без видео. В оконном режиме его
+        # прозрачность всегда равна единице, в полном экране панель всплывает.
+        self._title_bar_effect = QGraphicsOpacityEffect(self.title_bar)
+        self._title_bar_effect.setOpacity(1.0)
+        self.title_bar.setGraphicsEffect(self._title_bar_effect)
+        self._fullscreen_title_animation = QPropertyAnimation(
+            self._title_bar_effect,
             b"opacity",
             self,
         )
-        self._fullscreen_overlay_animation.setDuration(180)
-        self._fullscreen_overlay_animation.setEasingCurve(
+        self._fullscreen_title_animation.setDuration(180)
+        self._fullscreen_title_animation.setEasingCurve(
             QEasingCurve.Type.OutCubic
         )
-        self._fullscreen_overlay_animation.finished.connect(
-            self._fullscreen_overlay_animation_finished
+        self._fullscreen_title_animation.finished.connect(
+            self._fullscreen_title_animation_finished
         )
-        self.fullscreen_overlay.hide()
 
         self.title_bar.add_camera_clicked.connect(self.add_camera)
         self.title_bar.find_cameras_clicked.connect(self.find_cameras)
         self.title_bar.settings_clicked.connect(self.open_board_settings)
+        self.title_bar.layout_mode_changed.connect(self._layout_mode_changed)
         self.title_bar.fullscreen_clicked.connect(self.toggle_fullscreen)
-        self.title_bar.minimize_clicked.connect(self.showMinimized)
+        self.title_bar.minimize_clicked.connect(self._minimize_window)
         self.title_bar.close_clicked.connect(self.close)
-        self.fullscreen_minimize_button.clicked.connect(
-            self._minimize_from_fullscreen
-        )
-        self.fullscreen_windowed_button.clicked.connect(self.toggle_fullscreen)
-        self.fullscreen_close_button.clicked.connect(self.close)
         self.board.camera_count_changed.connect(self.title_bar.set_camera_count)
         self.board.layout_changed.connect(self._schedule_save)
         self.board.settings_requested.connect(self.open_camera_settings)
@@ -251,8 +219,6 @@ class MainWindow(QWidget):
         if application is not None:
             application.installEventFilter(self)
             self._application_event_filter_installed = True
-        self._position_fullscreen_overlay()
-
         if load_error:
             QTimer.singleShot(
                 0,
@@ -285,10 +251,14 @@ class MainWindow(QWidget):
         *,
         replacements: dict[str, CameraConfig] | None = None,
         autostart: bool | None = None,
+        layout_mode: str | None = None,
     ) -> AppConfig:
         return AppConfig(
             cameras=self.board.camera_configs(replacements),
             autostart=self.config.autostart if autostart is None else autostart,
+            layout_mode=(
+                self.config.layout_mode if layout_mode is None else layout_mode
+            ),
         )
 
     def _persist_candidate(self, candidate: AppConfig, *, show_error: bool = True) -> bool:
@@ -316,6 +286,19 @@ class MainWindow(QWidget):
 
     def add_camera(self) -> None:
         self.board.create_camera()
+
+    def _layout_mode_changed(self, mode: str) -> None:
+        previous = self.board.layout_mode()
+        if mode == previous:
+            return
+        if not self.board.set_layout_mode(mode):
+            self.title_bar.set_layout_mode(previous, animate=False)
+            return
+        candidate = self._snapshot_config(layout_mode=mode)
+        if self._persist_candidate(candidate):
+            return
+        self.board.set_layout_mode(previous)
+        self.title_bar.set_layout_mode(previous, animate=False)
 
     @staticmethod
     def _canonical_ip(value: str) -> str:
@@ -561,6 +544,7 @@ class MainWindow(QWidget):
             candidate = AppConfig(
                 cameras=tuple(remaining),
                 autostart=self.config.autostart,
+                layout_mode=self.config.layout_mode,
             )
             if self._persist_candidate(candidate):
                 self.board.remove_camera(camera_id)
@@ -679,20 +663,37 @@ class MainWindow(QWidget):
             self._register_fullscreen_activity()
         return super().eventFilter(watched, event)
 
-    def _position_fullscreen_overlay(self) -> None:
-        self.fullscreen_overlay.setGeometry(
-            max(
-                self.FULLSCREEN_OVERLAY_MARGIN,
-                self.width()
-                - self.FULLSCREEN_OVERLAY_WIDTH
-                - self.FULLSCREEN_OVERLAY_MARGIN,
-            ),
-            self.FULLSCREEN_OVERLAY_MARGIN,
-            self.FULLSCREEN_OVERLAY_WIDTH,
-            self.FULLSCREEN_OVERLAY_HEIGHT,
+    def _set_title_bar_floating(self, floating: bool) -> None:
+        if floating == self._title_bar_floating:
+            return
+        self.title_bar.hide()
+        if floating:
+            self.surface_layout.removeWidget(self.title_bar)
+            self._title_bar_floating = True
+            self.title_bar.set_floating(True)
+            self.title_bar.set_fullscreen_mode(True)
+            self._position_fullscreen_title_bar()
+            return
+
+        self.surface_layout.insertWidget(0, self.title_bar)
+        self._title_bar_floating = False
+        self.title_bar.set_floating(False)
+        self.title_bar.set_fullscreen_mode(False)
+        self._title_bar_effect.setOpacity(1.0)
+        self.title_bar.show()
+
+    def _position_fullscreen_title_bar(self) -> None:
+        if not self._title_bar_floating:
+            return
+        margin = self.FULLSCREEN_TITLE_MARGIN
+        self.title_bar.setGeometry(
+            margin,
+            margin,
+            max(1, self.surface.width() - margin * 2),
+            self.title_bar.height(),
         )
-        if self.fullscreen_overlay.isVisible():
-            self.fullscreen_overlay.raise_()
+        if self.title_bar.isVisible():
+            self.title_bar.raise_()
 
     def _set_fullscreen_cursor_hidden(self, hidden: bool) -> None:
         if hidden == self._fullscreen_cursor_hidden:
@@ -703,7 +704,7 @@ class MainWindow(QWidget):
         else:
             QApplication.restoreOverrideCursor()
 
-    def _set_fullscreen_overlay_visible(
+    def _set_fullscreen_title_visible(
         self,
         visible: bool,
         *,
@@ -711,48 +712,49 @@ class MainWindow(QWidget):
     ) -> None:
         if visible and (not self.isFullScreen() or self.isMinimized()):
             return
-        if visible == self._fullscreen_overlay_target_visible:
+        if visible == self._fullscreen_title_target_visible:
             if visible:
-                self.fullscreen_overlay.show()
-                self.fullscreen_overlay.raise_()
+                self.title_bar.show()
+                self.title_bar.raise_()
             return
 
-        self._fullscreen_overlay_target_visible = visible
-        self._fullscreen_overlay_animation.stop()
+        self._fullscreen_title_target_visible = visible
+        self._fullscreen_title_animation.stop()
         target_opacity = 1.0 if visible else 0.0
         if visible:
-            self._position_fullscreen_overlay()
-            self.fullscreen_overlay.show()
-            self.fullscreen_overlay.raise_()
+            self._position_fullscreen_title_bar()
+            self.title_bar.show()
+            self.title_bar.raise_()
 
         if (
             not animate
-            or abs(self._fullscreen_overlay_effect.opacity() - target_opacity) < 0.01
+            or abs(self._title_bar_effect.opacity() - target_opacity) < 0.01
         ):
-            self._fullscreen_overlay_effect.setOpacity(target_opacity)
-            self._fullscreen_overlay_animation_finished()
+            self._title_bar_effect.setOpacity(target_opacity)
+            self._fullscreen_title_animation_finished()
             return
 
-        self._fullscreen_overlay_animation.setStartValue(
-            self._fullscreen_overlay_effect.opacity()
+        self._fullscreen_title_animation.setStartValue(
+            self._title_bar_effect.opacity()
         )
-        self._fullscreen_overlay_animation.setEndValue(target_opacity)
-        self._fullscreen_overlay_animation.start()
+        self._fullscreen_title_animation.setEndValue(target_opacity)
+        self._fullscreen_title_animation.start()
 
-    def _fullscreen_overlay_animation_finished(self) -> None:
-        if self._fullscreen_overlay_target_visible:
-            self._fullscreen_overlay_effect.setOpacity(1.0)
-            self.fullscreen_overlay.show()
-            self.fullscreen_overlay.raise_()
+    def _fullscreen_title_animation_finished(self) -> None:
+        if self._fullscreen_title_target_visible:
+            self._title_bar_effect.setOpacity(1.0)
+            self.title_bar.show()
+            self.title_bar.raise_()
             return
-        self._fullscreen_overlay_effect.setOpacity(0.0)
-        self.fullscreen_overlay.hide()
+        self._title_bar_effect.setOpacity(0.0)
+        if self._title_bar_floating:
+            self.title_bar.hide()
 
     def _register_fullscreen_activity(self) -> None:
         if not self.isFullScreen() or self.isMinimized():
             return
         self._set_fullscreen_cursor_hidden(False)
-        self._set_fullscreen_overlay_visible(True)
+        self._set_fullscreen_title_visible(True)
         self._fullscreen_idle_timer.start()
 
     def _fullscreen_idle_timeout(self) -> None:
@@ -763,50 +765,57 @@ class MainWindow(QWidget):
             self._set_fullscreen_cursor_hidden(False)
             return
         if (
-            self.fullscreen_overlay.underMouse()
+            self.title_bar.underMouse()
             or QApplication.mouseButtons() != Qt.MouseButton.NoButton
         ):
             self._set_fullscreen_cursor_hidden(False)
             self._fullscreen_idle_timer.start()
             return
         self._set_fullscreen_cursor_hidden(True)
-        self._set_fullscreen_overlay_visible(False)
+        self._set_fullscreen_title_visible(False)
 
     def _activate_fullscreen_ui(self) -> None:
         if not self.isFullScreen() or self.isMinimized():
             return
-        self.title_bar.hide()
-        self._position_fullscreen_overlay()
+        self._set_title_bar_floating(True)
+        self._position_fullscreen_title_bar()
         self._register_fullscreen_activity()
 
     def _deactivate_fullscreen_ui(self) -> None:
         self._fullscreen_idle_timer.stop()
-        self._fullscreen_overlay_animation.stop()
-        self._fullscreen_overlay_target_visible = False
-        self._fullscreen_overlay_effect.setOpacity(0.0)
-        self.fullscreen_overlay.hide()
+        self._fullscreen_title_animation.stop()
+        self._fullscreen_title_target_visible = False
+        if self._title_bar_floating:
+            self._title_bar_effect.setOpacity(0.0)
+            self.title_bar.hide()
         self._set_fullscreen_cursor_hidden(False)
 
-    def _minimize_from_fullscreen(self) -> None:
-        self._fullscreen_idle_timer.stop()
-        self._set_fullscreen_cursor_hidden(False)
+    def _minimize_window(self) -> None:
+        if self.isFullScreen():
+            self._fullscreen_idle_timer.stop()
+            self._set_fullscreen_title_visible(False, animate=False)
+            self._set_fullscreen_cursor_hidden(False)
         self.showMinimized()
 
     def _escape_pressed(self) -> None:
         # В обычном режиме Esc намеренно ничего не делает и не закрывает окно.
+        if self.board.collapse_expanded_camera():
+            return
         if self.isFullScreen():
             self.toggle_fullscreen()
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
             self._deactivate_fullscreen_ui()
-            self.title_bar.show()
+            self._set_title_bar_floating(False)
             if self._was_maximized_before_fullscreen:
                 self.showMaximized()
             else:
                 self.showNormal()
         else:
             self._was_maximized_before_fullscreen = self.isMaximized()
+            self._set_title_bar_floating(True)
+            self._title_bar_effect.setOpacity(0.0)
             self.title_bar.hide()
             self.showFullScreen()
             QTimer.singleShot(0, self._activate_fullscreen_ui)
@@ -830,8 +839,8 @@ class MainWindow(QWidget):
         self.surface.style().polish(self.surface)
         self.board.set_corner_radius(0.0 if flat else 20.0)
         if self.isFullScreen():
-            self.title_bar.hide()
-            self._position_fullscreen_overlay()
+            self._set_title_bar_floating(True)
+            self._position_fullscreen_title_bar()
             if self.isMinimized() or not self.isActiveWindow():
                 self._fullscreen_idle_timer.stop()
                 self._set_fullscreen_cursor_hidden(False)
@@ -839,7 +848,7 @@ class MainWindow(QWidget):
                 self._register_fullscreen_activity()
         else:
             self._deactivate_fullscreen_ui()
-            self.title_bar.show()
+            self._set_title_bar_floating(False)
         self.update()
 
     def changeEvent(self, event: QEvent) -> None:
@@ -877,8 +886,8 @@ class MainWindow(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "title_bar"):
             self.title_bar.set_compact(self.width() < 1080)
-        if hasattr(self, "fullscreen_overlay"):
-            self._position_fullscreen_overlay()
+        if hasattr(self, "surface"):
+            self._position_fullscreen_title_bar()
 
     def _resize_edges(self, position: QPoint) -> Qt.Edge:
         if self.isMaximized() or self.isFullScreen():
