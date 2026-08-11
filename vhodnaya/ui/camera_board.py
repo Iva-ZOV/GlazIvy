@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import time
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -19,10 +19,12 @@ from PySide6.QtGui import (
     QShowEvent,
 )
 from PySide6.QtWidgets import (
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -35,8 +37,32 @@ from .widgets import (
     SegmentedControl,
     ToolIconButton,
     draw_grain,
+    set_action_button_capitalization,
     set_heading_capitalization,
 )
+
+
+class _TitleBarCenterBlock(QWidget):
+    """Центральный блок панели: контролы принимают клики, фон двигает окно."""
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            handle = window.windowHandle()
+            if handle is not None and not window.isFullScreen():
+                handle.startSystemMove()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            toggle = getattr(self.window(), "toggle_maximized", None)
+            if callable(toggle):
+                toggle()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
 
 
 class BoardTitleBar(QWidget):
@@ -56,28 +82,46 @@ class BoardTitleBar(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("titleBar")
-        self.setFixedHeight(60)
+        self.setFixedHeight(62)
         self._compact = False
         self._fullscreen = False
         self._discovery_busy = False
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 0, 10, 0)
-        layout.setSpacing(9)
-        layout.addWidget(LogoGlyph(28, self))
+        self._layout = QGridLayout(self)
+        self._layout.setContentsMargins(16, 0, 10, 0)
+        self._layout.setHorizontalSpacing(7)
+        self._layout.setVerticalSpacing(0)
+        self._layout.setColumnStretch(0, 1)
+        self._layout.setColumnStretch(1, 0)
+        self._layout.setColumnStretch(2, 1)
 
-        title = QLabel(APP_NAME, self)
-        title.setObjectName("appTitle")
-        set_heading_capitalization(title)
-        layout.addWidget(title)
-        self.subtitle = QLabel("Доска камер", self)
-        self.subtitle.setObjectName("boardSubtitle")
-        layout.addWidget(self.subtitle)
-        layout.addStretch(1)
+        self._left_group = QWidget(self)
+        left = QHBoxLayout(self._left_group)
+        self._left_layout = left
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(9)
+        self.logo = LogoGlyph(36, self._left_group)
+        left.addWidget(self.logo)
+        self.title = QLabel(APP_NAME, self._left_group)
+        self.title.setObjectName("appTitle")
+        set_heading_capitalization(self.title)
+        left.addWidget(self.title)
+        self._layout.addWidget(
+            self._left_group,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
+
+        self.center_block = _TitleBarCenterBlock(self)
+        center = QVBoxLayout(self.center_block)
+        center.setContentsMargins(0, 3, 0, 3)
+        center.setSpacing(1)
 
         self.camera_count = QLabel(self)
         self.camera_count.setObjectName("cameraCount")
-        layout.addWidget(self.camera_count)
+        self.camera_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center.addWidget(self.camera_count, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.layout_control = SegmentedControl(
             ("Свободно", "Сетка"),
@@ -87,19 +131,42 @@ class BoardTitleBar(QWidget):
         )
         self.layout_control.setToolTip("Режим раскладки камер")
         self.layout_control.value_changed.connect(self.layout_mode_changed)
-        layout.addWidget(self.layout_control)
+        center.addWidget(self.layout_control, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.center_block.setFixedWidth(self.layout_control.sizeHint().width())
+        self._layout.addWidget(
+            self.center_block,
+            0,
+            1,
+            Qt.AlignmentFlag.AlignCenter,
+        )
+
+        self._right_group = QWidget(self)
+        right = QHBoxLayout(self._right_group)
+        self._right_layout = right
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(3)
+
+        self._action_pair = QWidget(self._right_group)
+        pair = QHBoxLayout(self._action_pair)
+        pair.setContentsMargins(0, 0, 0, 0)
+        pair.setSpacing(1)
 
         self.find_button = QPushButton("Найти камеры", self)
-        self.find_button.setObjectName("secondaryButton")
+        self.find_button.setObjectName("findCameraButton")
+        self.find_button.setFixedHeight(36)
         self.find_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_action_button_capitalization(self.find_button)
         self.find_button.clicked.connect(self.find_cameras_clicked)
-        layout.addWidget(self.find_button)
+        pair.addWidget(self.find_button)
 
         self.add_button = QPushButton("＋  Добавить камеру", self)
         self.add_button.setObjectName("addCameraButton")
+        self.add_button.setFixedHeight(36)
         self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_action_button_capitalization(self.add_button)
         self.add_button.clicked.connect(self.add_camera_clicked)
-        layout.addWidget(self.add_button)
+        pair.addWidget(self.add_button)
+        right.addWidget(self._action_pair)
 
         self.settings_button = ToolIconButton(
             "settings",
@@ -119,13 +186,22 @@ class BoardTitleBar(QWidget):
             self.minimize_button,
             self.close_button,
         ):
-            layout.addWidget(button)
+            right.addWidget(button)
+
+        self._layout.addWidget(
+            self._right_group,
+            0,
+            2,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
 
         self.settings_button.clicked.connect(self.settings_clicked)
         self.fullscreen_button.clicked.connect(self.fullscreen_clicked)
         self.minimize_button.clicked.connect(self.minimize_clicked)
         self.close_button.clicked.connect(self.close_clicked)
         self.set_camera_count(0)
+        self._sync_action_buttons()
+        self._sync_side_columns()
 
     @staticmethod
     def _camera_word(count: int) -> str:
@@ -142,9 +218,28 @@ class BoardTitleBar(QWidget):
         if compact == self._compact:
             return
         self._compact = compact
-        self.subtitle.setVisible(not compact)
-        self.camera_count.setVisible(self._fullscreen or not compact)
+        if compact:
+            self.title.hide()
+            self._right_layout.removeWidget(self._action_pair)
+            self._left_layout.addWidget(self._action_pair)
+        else:
+            self._left_layout.removeWidget(self._action_pair)
+            self._right_layout.insertWidget(0, self._action_pair)
+            self.title.show()
+        for button in (self.find_button, self.add_button):
+            button.setProperty("compact", compact)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        tool_size = 30 if compact else 34
+        for button in (
+            self.settings_button,
+            self.fullscreen_button,
+            self.minimize_button,
+            self.close_button,
+        ):
+            button.setFixedSize(tool_size, tool_size)
         self._sync_action_buttons()
+        self._sync_side_columns()
 
     def set_layout_mode(self, mode: str, *, animate: bool = True) -> None:
         self.layout_control.set_value(mode, animate=animate)
@@ -153,16 +248,10 @@ class BoardTitleBar(QWidget):
         if fullscreen == self._fullscreen:
             return
         self._fullscreen = fullscreen
-        self.camera_count.setVisible(fullscreen or not self._compact)
         self.fullscreen_button.set_kind(
             "windowed" if fullscreen else "fullscreen",
             "Оконный режим · F11" if fullscreen else "Полный экран · F11",
         )
-
-    def set_floating(self, floating: bool) -> None:
-        self.setProperty("floating", floating)
-        self.style().unpolish(self)
-        self.style().polish(self)
 
     def set_discovery_busy(self, busy: bool) -> None:
         self._discovery_busy = busy
@@ -175,6 +264,22 @@ class BoardTitleBar(QWidget):
         else:
             self.find_button.setText("Найти камеры")
         self.add_button.setText("＋  Камеру" if self._compact else "＋  Добавить камеру")
+
+    def _sync_side_columns(self) -> None:
+        self._left_group.ensurePolished()
+        self._right_group.ensurePolished()
+        self._left_group.layout().activate()
+        self._right_group.layout().activate()
+        side_width = max(
+            self._left_group.sizeHint().width(),
+            self._right_group.sizeHint().width(),
+        )
+        self._layout.setColumnMinimumWidth(0, side_width)
+        self._layout.setColumnMinimumWidth(2, side_width)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._sync_side_columns()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -223,7 +328,8 @@ class CameraBoard(QWidget):
         self._layout_mode = layout_mode
         self._expanded_camera_id: str | None = None
         self._last_raise_snapshot: tuple[str, tuple[str, ...], float] | None = None
-        self._corner_radius = 20.0
+        self._corner_radius = 10.0
+        self._fullscreen_reference_size: QSize | None = None
         self.setObjectName("cameraBoard")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(CameraTile.MINIMUM_WIDTH, CameraTile.MINIMUM_HEIGHT)
@@ -245,15 +351,33 @@ class CameraBoard(QWidget):
     def has_expanded_camera(self) -> bool:
         return self._expanded_camera_id is not None
 
-    @staticmethod
-    def _geometry_from_tile(tile: CameraTile, z: int) -> CameraGeometry:
+    def _free_scale_factors(self) -> tuple[float, float]:
+        reference = self._fullscreen_reference_size
+        if reference is None or reference.width() <= 0 or reference.height() <= 0:
+            return 1.0, 1.0
+        return (
+            max(1, self.width()) / reference.width(),
+            max(1, self.height()) / reference.height(),
+        )
+
+    def _geometry_from_tile(self, tile: CameraTile, z: int) -> CameraGeometry:
         rect = tile.geometry()
+        scale_x, scale_y = self._free_scale_factors()
         return CameraGeometry(
-            x=rect.x(),
-            y=rect.y(),
-            width=rect.width(),
-            height=rect.height(),
+            x=round(rect.x() / scale_x),
+            y=round(rect.y() / scale_y),
+            width=round(rect.width() / scale_x),
+            height=round(rect.height() / scale_y),
             z=z,
+        )
+
+    def _scaled_free_geometry(self, geometry: CameraGeometry) -> QRect:
+        scale_x, scale_y = self._free_scale_factors()
+        return QRect(
+            round(geometry.x * scale_x),
+            round(geometry.y * scale_y),
+            round(geometry.width * scale_x),
+            round(geometry.height * scale_y),
         )
 
     def _remember_free_geometry(self, camera_id: str) -> None:
@@ -322,8 +446,11 @@ class CameraBoard(QWidget):
         return tile
 
     def create_camera(self, base_config: CameraConfig | None = None) -> CameraConfig:
-        board_width = max(self.width(), CameraTile.MINIMUM_WIDTH + 48)
-        board_height = max(self.height(), CameraTile.MINIMUM_HEIGHT + 48)
+        reference = self._fullscreen_reference_size
+        logical_width = reference.width() if reference is not None else self.width()
+        logical_height = reference.height() if reference is not None else self.height()
+        board_width = max(logical_width, CameraTile.MINIMUM_WIDTH + 48)
+        board_height = max(logical_height, CameraTile.MINIMUM_HEIGHT + 48)
         width = max(
             CameraTile.MINIMUM_WIDTH,
             min(620, board_width - 48),
@@ -417,14 +544,17 @@ class CameraBoard(QWidget):
         self._free_geometries[config.camera_id] = config.geometry
         tile.apply_config(config)
         if self._layout_mode == "free" and self._expanded_camera_id is None:
-            tile.setGeometry(
-                config.geometry.x,
-                config.geometry.y,
-                config.geometry.width,
-                config.geometry.height,
-            )
-            if tile.constrain_to_parent():
-                self._remember_free_geometry(config.camera_id)
+            if self._fullscreen_reference_size is not None:
+                tile.setGeometry(self._scaled_free_geometry(config.geometry))
+            else:
+                tile.setGeometry(
+                    config.geometry.x,
+                    config.geometry.y,
+                    config.geometry.width,
+                    config.geometry.height,
+                )
+                if tile.constrain_to_parent():
+                    self._remember_free_geometry(config.camera_id)
         return True
 
     def set_layout_mode(self, mode: str) -> bool:
@@ -469,25 +599,23 @@ class CameraBoard(QWidget):
         interaction_enabled = (
             self._layout_mode == "free" and self._expanded_camera_id is None
         )
+        scale_x, scale_y = self._free_scale_factors()
         for camera_id, tile in self._tiles.items():
+            tile.set_layout_scale(scale_x, scale_y)
             tile.set_layout_interaction_enabled(interaction_enabled)
             tile.set_expanded(camera_id == self._expanded_camera_id)
 
     def _apply_free_layout(self) -> bool:
         changed = False
+        scaled = self._fullscreen_reference_size is not None
         for camera_id in self._tile_order:
             tile = self._tiles.get(camera_id)
             geometry = self._free_geometries.get(camera_id)
             if tile is None or geometry is None:
                 continue
             tile.show()
-            tile.setGeometry(
-                geometry.x,
-                geometry.y,
-                geometry.width,
-                geometry.height,
-            )
-            if tile.constrain_to_parent():
+            tile.setGeometry(self._scaled_free_geometry(geometry))
+            if not scaled and tile.constrain_to_parent():
                 self._remember_free_geometry(camera_id)
                 changed = True
         self._raise_in_saved_order()
@@ -542,6 +670,22 @@ class CameraBoard(QWidget):
     def set_corner_radius(self, radius: float) -> None:
         self._corner_radius = max(0.0, radius)
         self.update()
+
+    def set_fullscreen_reference_size(self, size: QSize | None) -> None:
+        """Включает временное масштабирование поверх оконных координат."""
+
+        if size is None:
+            if self._fullscreen_reference_size is None:
+                return
+            self._fullscreen_reference_size = None
+            self._apply_current_layout()
+            return
+
+        reference = QSize(max(1, size.width()), max(1, size.height()))
+        if self._fullscreen_reference_size is None:
+            self._capture_free_layout()
+        self._fullscreen_reference_size = reference
+        self._apply_current_layout()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

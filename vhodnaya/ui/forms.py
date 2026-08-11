@@ -186,14 +186,6 @@ class CameraForm(QWidget):
         timeout_help.setWordWrap(True)
         root.addWidget(timeout_help)
 
-        options_section = QLabel("Плитка", self)
-        options_section.setObjectName("sectionTitle")
-        root.addWidget(options_section)
-
-        self.clock_check = QCheckBox("Показывать часы и дату поверх видео", self)
-        self.clock_check.setChecked(config.show_clock)
-        root.addWidget(self.clock_check)
-
         self.error_label = QLabel(self)
         self.error_label.setObjectName("errorText")
         self.error_label.setWordWrap(True)
@@ -233,7 +225,6 @@ class CameraForm(QWidget):
             transport=self.transport_control.value(),
             quality=self.quality_control.value(),
             stream_path=self.path_edit.text().strip(),
-            show_clock=self.clock_check.isChecked(),
         )
         if self._base_config.source == "onvif":
             username = self.username_edit.text()

@@ -35,7 +35,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     QFrame#dialogSurface {{
         background-color: {SURFACE};
         border: 1px solid rgba(184, 155, 106, 48);
-        border-radius: 22px;
+        border-radius: 10px;
     }}
 
     QFrame#windowSurface[flat="true"] {{
@@ -48,16 +48,10 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         border: none;
     }}
 
-    QWidget#titleBar[floating="true"] {{
-        background-color: rgba(17, 18, 15, 238);
-        border: 1px solid rgba(184, 155, 106, 76);
-        border-radius: 15px;
-    }}
-
     QWidget#cameraTileHeader {{
         background-color: rgba(17, 18, 15, 240);
         border: 1px solid rgba(184, 155, 106, 82);
-        border-radius: 17px;
+        border-radius: 6px;
     }}
 
     QLabel#appTitle {{
@@ -73,25 +67,15 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         font-weight: 500;
     }}
 
-    QLabel#boardSubtitle,
     QLabel#cameraCount {{
         color: {TEXT_MUTED};
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 500;
     }}
 
     QLabel#cameraTileName {{
         color: {TEXT};
         font-size: 13px;
-        font-weight: 600;
-    }}
-
-    QLabel#tileClock {{
-        color: rgba(230, 214, 174, 245);
-        background-color: rgba(17, 18, 15, 218);
-        border: 1px solid rgba(184, 155, 106, 74);
-        border-radius: 9px;
-        font-size: 11px;
         font-weight: 600;
     }}
 
@@ -119,7 +103,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: #E7A29A;
         background-color: rgba(192, 50, 43, 24);
         border: 1px solid rgba(192, 50, 43, 92);
-        border-radius: 10px;
+        border-radius: 6px;
         padding: 9px 11px;
     }}
 
@@ -137,7 +121,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: {TEXT};
         background-color: {SURFACE_RAISED};
         border: 1px solid rgba(184, 155, 106, 48);
-        border-radius: 11px;
+        border-radius: 6px;
         selection-color: {TEXT};
         selection-background-color: rgba(110, 122, 69, 150);
     }}
@@ -187,7 +171,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     QFrame#discoveryRow {{
         background-color: {SURFACE_RAISED};
         border: 1px solid rgba(184, 155, 106, 42);
-        border-radius: 12px;
+        border-radius: 6px;
     }}
 
     QCheckBox {{
@@ -226,14 +210,33 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: {TEXT};
         background-color: {PRIMARY};
         border: 1px solid rgba(230, 214, 174, 22);
-        border-radius: 11px;
+        border-radius: 6px;
         font-weight: 700;
     }}
 
     QPushButton#addCameraButton {{
         min-height: 36px;
-        padding: 0 16px;
+        max-height: 36px;
+        padding: 0 13px;
         font-size: 13px;
+    }}
+
+    QPushButton#findCameraButton {{
+        min-height: 36px;
+        max-height: 36px;
+        padding: 0 13px;
+        color: {BRONZE};
+        background-color: transparent;
+        border: 1px solid rgba(184, 155, 106, 145);
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+    }}
+
+    QPushButton#addCameraButton[compact="true"],
+    QPushButton#findCameraButton[compact="true"] {{
+        padding: 0 8px;
+        font-size: 11px;
     }}
 
     QPushButton#primaryButton:hover,
@@ -242,10 +245,22 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         border-color: rgba(230, 214, 174, 50);
     }}
 
+    QPushButton#findCameraButton:hover {{
+        color: {TEXT};
+        background-color: rgba(184, 155, 106, 18);
+        border-color: rgba(230, 214, 174, 175);
+    }}
+
     QPushButton#primaryButton:pressed,
     QPushButton#addCameraButton:pressed {{
         background-color: {PRIMARY_PRESSED};
         border-color: rgba(139, 30, 30, 230);
+    }}
+
+    QPushButton#findCameraButton:pressed {{
+        color: {TEXT};
+        background-color: rgba(184, 155, 106, 34);
+        border-color: {BRONZE};
     }}
 
     QPushButton#primaryButton:disabled,
@@ -255,13 +270,19 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         border: 1px solid rgba(184, 155, 106, 18);
     }}
 
+    QPushButton#findCameraButton:disabled {{
+        color: rgba(184, 155, 106, 72);
+        background-color: transparent;
+        border: 1px solid rgba(184, 155, 106, 36);
+    }}
+
     QPushButton#secondaryButton {{
         min-height: 40px;
         padding: 0 17px;
         color: {BRONZE};
         background-color: transparent;
         border: 1px solid rgba(184, 155, 106, 145);
-        border-radius: 11px;
+        border-radius: 6px;
         font-weight: 600;
     }}
 
@@ -289,7 +310,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: #DD746D;
         background-color: transparent;
         border: 1px solid rgba(192, 50, 43, 180);
-        border-radius: 11px;
+        border-radius: 6px;
         font-weight: 650;
     }}
 
@@ -369,7 +390,7 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: {TEXT};
         background-color: {SURFACE_RAISED};
         border: 1px solid rgba(184, 155, 106, 90);
-        border-radius: 7px;
+        border-radius: 6px;
         padding: 6px 8px;
     }}
     """

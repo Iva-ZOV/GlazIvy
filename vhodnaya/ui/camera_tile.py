@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from PySide6.QtCore import (
     QEvent,
     QEasingCurve,
@@ -74,8 +72,10 @@ class CameraTile(QWidget):
         self._initial_geometry = QRect()
         self._drag_targets: set[QWidget] = set()
         self._header_target_visible = False
-        self._information_overlays_target_visible = True
+        self._status_target_visible = True
         self._layout_interaction_enabled = True
+        self._interaction_minimum_width = self.MINIMUM_WIDTH
+        self._interaction_minimum_height = self.MINIMUM_HEIGHT
         self._expanded = False
         self._highlight_opacity = 0.0
 
@@ -96,7 +96,7 @@ class CameraTile(QWidget):
         header_layout.setContentsMargins(12, 0, 8, 0)
         header_layout.setSpacing(7)
 
-        self.logo = LogoGlyph(22, self.header)
+        self.logo = LogoGlyph(28, self.header)
         header_layout.addWidget(self.logo)
         self.name_label = QLabel(self.header)
         self.name_label.setObjectName("cameraTileName")
@@ -159,15 +159,8 @@ class CameraTile(QWidget):
         self.video = VideoCanvas(self)
         self.video.setMinimumSize(0, 0)
         self.video.unsetCursor()
-        self.video.set_corner_radius(17.0)
+        self.video.set_corner_radius(8.0)
         self._root_layout.addWidget(self.video, 1)
-
-        self.clock_label = QLabel(self.video)
-        self.clock_label.setObjectName("tileClock")
-        self.clock_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.clock_label.setContentsMargins(9, 4, 9, 4)
-        self.clock_label.raise_()
 
         self._status_effect = QGraphicsOpacityEffect(self.status)
         self._status_effect.setOpacity(1.0)
@@ -181,22 +174,6 @@ class CameraTile(QWidget):
         self._status_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._status_animation.finished.connect(self._status_animation_finished)
 
-        self._clock_effect = QGraphicsOpacityEffect(self.clock_label)
-        self._clock_effect.setOpacity(1.0)
-        self.clock_label.setGraphicsEffect(self._clock_effect)
-        self._clock_animation = QPropertyAnimation(
-            self._clock_effect,
-            b"opacity",
-            self,
-        )
-        self._clock_animation.setDuration(180)
-        self._clock_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._clock_animation.finished.connect(self._clock_animation_finished)
-
-        self._clock_timer = QTimer(self)
-        self._clock_timer.setInterval(1000)
-        self._clock_timer.timeout.connect(self._update_clock)
-        self._clock_timer.start()
         self._cleanup_timer = QTimer(self)
         self._cleanup_timer.setInterval(4000)
         self._cleanup_timer.timeout.connect(self._prune_readers)
@@ -254,26 +231,22 @@ class CameraTile(QWidget):
         position = self.header.mapFromGlobal(QCursor.pos())
         return self.header.isVisible() and self.header.rect().contains(position)
 
-    def _set_information_overlays_visible(
+    def _set_status_visible(
         self,
         visible: bool,
         *,
         animate: bool = True,
     ) -> None:
-        if visible == self._information_overlays_target_visible:
+        if visible == self._status_target_visible:
             return
 
-        self._information_overlays_target_visible = visible
+        self._status_target_visible = visible
         target_opacity = 1.0 if visible else 0.0
         self._status_animation.stop()
-        self._clock_animation.stop()
 
         if visible:
             self.status.show()
             self.status.raise_()
-            if self.config.show_clock:
-                self.clock_label.show()
-                self.clock_label.raise_()
 
         if not animate or abs(self._status_effect.opacity() - target_opacity) < 0.01:
             self._status_effect.setOpacity(target_opacity)
@@ -283,34 +256,14 @@ class CameraTile(QWidget):
             self._status_animation.setEndValue(target_opacity)
             self._status_animation.start()
 
-        if not self.config.show_clock:
-            self._clock_effect.setOpacity(target_opacity)
-            self.clock_label.hide()
-        elif not animate or abs(self._clock_effect.opacity() - target_opacity) < 0.01:
-            self._clock_effect.setOpacity(target_opacity)
-            self._clock_animation_finished()
-        else:
-            self._clock_animation.setStartValue(self._clock_effect.opacity())
-            self._clock_animation.setEndValue(target_opacity)
-            self._clock_animation.start()
-
     def _status_animation_finished(self) -> None:
-        if self._information_overlays_target_visible:
+        if self._status_target_visible:
             self._status_effect.setOpacity(1.0)
             self.status.show()
             self.status.raise_()
             return
         self._status_effect.setOpacity(0.0)
         self.status.hide()
-
-    def _clock_animation_finished(self) -> None:
-        if self._information_overlays_target_visible and self.config.show_clock:
-            self._clock_effect.setOpacity(1.0)
-            self.clock_label.show()
-            self.clock_label.raise_()
-            return
-        self._clock_effect.setOpacity(0.0)
-        self.clock_label.hide()
 
     def _register_header_activity(self) -> None:
         if self._shutting_down:
@@ -338,7 +291,7 @@ class CameraTile(QWidget):
 
         self._header_target_visible = visible
         self._header_animation.stop()
-        self._set_information_overlays_visible(not visible, animate=animate)
+        self._set_status_visible(not visible, animate=animate)
         target_opacity = 1.0 if visible else 0.0
         if visible:
             self.header.setEnabled(True)
@@ -536,17 +489,29 @@ class CameraTile(QWidget):
         edges = self._resize_edges_value
 
         if edges & Qt.Edge.LeftEdge:
-            x = max(0, min(initial.x() + delta.x(), right - self.MINIMUM_WIDTH))
+            x = max(
+                0,
+                min(
+                    initial.x() + delta.x(),
+                    right - self._interaction_minimum_width,
+                ),
+            )
         if edges & Qt.Edge.RightEdge:
             right = max(
-                x + self.MINIMUM_WIDTH,
+                x + self._interaction_minimum_width,
                 min(initial.x() + initial.width() + delta.x(), board_width),
             )
         if edges & Qt.Edge.TopEdge:
-            y = max(0, min(initial.y() + delta.y(), bottom - self.MINIMUM_HEIGHT))
+            y = max(
+                0,
+                min(
+                    initial.y() + delta.y(),
+                    bottom - self._interaction_minimum_height,
+                ),
+            )
         if edges & Qt.Edge.BottomEdge:
             bottom = max(
-                y + self.MINIMUM_HEIGHT,
+                y + self._interaction_minimum_height,
                 min(initial.y() + initial.height() + delta.y(), board_height),
             )
         self.setGeometry(x, y, right - x, bottom - y)
@@ -583,10 +548,30 @@ class CameraTile(QWidget):
             self.releaseMouse()
         self.unsetCursor()
         if enabled:
-            self.setMinimumSize(self.MINIMUM_WIDTH, self.MINIMUM_HEIGHT)
+            self.setMinimumSize(
+                self._interaction_minimum_width,
+                self._interaction_minimum_height,
+            )
         else:
             self.setMinimumSize(0, 0)
         self.update()
+
+    def set_layout_scale(self, scale_x: float, scale_y: float) -> None:
+        """Масштабирует только экранные пределы, не меняя оконную геометрию."""
+
+        self._interaction_minimum_width = max(
+            1,
+            round(self.MINIMUM_WIDTH * max(0.01, scale_x)),
+        )
+        self._interaction_minimum_height = max(
+            1,
+            round(self.MINIMUM_HEIGHT * max(0.01, scale_y)),
+        )
+        if self._layout_interaction_enabled:
+            self.setMinimumSize(
+                self._interaction_minimum_width,
+                self._interaction_minimum_height,
+            )
 
     def set_expanded(self, expanded: bool) -> None:
         if expanded == self._expanded:
@@ -594,7 +579,7 @@ class CameraTile(QWidget):
         self._expanded = expanded
         margin = 0 if expanded else 1
         self._root_layout.setContentsMargins(margin, margin, margin, margin)
-        self.video.set_corner_radius(0.0 if expanded else 17.0)
+        self.video.set_corner_radius(0.0 if expanded else 8.0)
         if expanded:
             self._set_highlight_visible(False)
         elif self._header_target_visible:
@@ -624,13 +609,6 @@ class CameraTile(QWidget):
         self.name_label.setToolTip(self.config.camera_name)
         self.quality_control.set_value(self.config.quality, animate=True)
         self.transport_control.set_value(self.config.transport, animate=True)
-        self._clock_animation.stop()
-        clock_visible = (
-            self.config.show_clock and self._information_overlays_target_visible
-        )
-        self._clock_effect.setOpacity(1.0 if clock_visible else 0.0)
-        self.clock_label.setVisible(clock_visible)
-        self._update_clock()
 
     def apply_config(self, config: CameraConfig) -> None:
         previous = self.config
@@ -744,23 +722,8 @@ class CameraTile(QWidget):
             if generation != self._generation and not reader.is_alive():
                 self._readers.pop(generation, None)
 
-    def _update_clock(self) -> None:
-        self.clock_label.setText(datetime.now().strftime("%H:%M:%S  ·  %d.%m.%Y"))
-        self.clock_label.adjustSize()
-        self._position_clock()
-
-    def _position_clock(self) -> None:
-        margin = 12
-        self.clock_label.move(
-            max(margin, self.video.width() - self.clock_label.width() - margin),
-            margin,
-        )
-        self.clock_label.raise_()
-
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        if hasattr(self, "clock_label"):
-            self._position_clock()
         if hasattr(self, "header"):
             self._position_overlays()
 
@@ -773,7 +736,7 @@ class CameraTile(QWidget):
         border.setAlpha(82)
         painter.setPen(QPen(border, 1))
         painter.setBrush(QColor(SURFACE_RAISED))
-        radius = 0.0 if self._expanded else 18.0
+        radius = 0.0 if self._expanded else 8.0
         painter.drawRoundedRect(rect, radius, radius)
 
         if self._highlight_opacity > 0.01 and not self._expanded:
@@ -783,8 +746,8 @@ class CameraTile(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(
                 QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75),
-                17.5,
-                17.5,
+                7.5,
+                7.5,
             )
 
         # Ненавязчивый маркер правого нижнего угла подсказывает про ресайз.
@@ -809,8 +772,6 @@ class CameraTile(QWidget):
         self._header_animation.stop()
         self._highlight_animation.stop()
         self._status_animation.stop()
-        self._clock_animation.stop()
-        self._clock_timer.stop()
         self._cleanup_timer.stop()
         if self._interaction is not None:
             self._interaction = None

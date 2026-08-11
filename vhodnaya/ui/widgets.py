@@ -75,6 +75,14 @@ def set_heading_capitalization(label: QLabel) -> None:
     label.setFont(font)
 
 
+def set_action_button_capitalization(button: QAbstractButton) -> None:
+    """Отрисовывает рабочую кнопку капсом, сохраняя исходный текст для a11y."""
+
+    font = QFont(button.font())
+    font.setCapitalization(QFont.Capitalization.AllUppercase)
+    button.setFont(font)
+
+
 def _logo_pixmap(size: QSize, dpr: float) -> QPixmap | None:
     global _logo_source
     if _logo_source is None:
@@ -150,7 +158,7 @@ class GrainFrame(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
-        radius = 0.0 if self.property("flat") else 21.0
+        radius = 0.0 if self.property("flat") else 10.0
         if radius > 0.0:
             clip = QPainterPath()
             clip.setFillRule(Qt.FillRule.WindingFill)
@@ -162,7 +170,7 @@ class GrainFrame(QFrame):
 class LogoGlyph(QWidget):
     """Растровый логотип-котик с векторным fallback без внешнего шрифта."""
 
-    def __init__(self, size: int = 28, parent: QWidget | None = None) -> None:
+    def __init__(self, size: int = 36, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(size, size)
 
@@ -183,23 +191,19 @@ class LogoGlyph(QWidget):
             )
             return
 
-        rect = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
-        gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        gradient.setColorAt(0.0, _color(BRONZE))
-        gradient.setColorAt(1.0, _color(PRIMARY))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(gradient)
-        painter.drawRoundedRect(rect, rect.width() * 0.29, rect.height() * 0.29)
-
-        center = rect.center()
-        radius = rect.width() * 0.24
-        painter.setBrush(_color(BACKGROUND, 235))
-        painter.drawEllipse(center, radius, radius)
-        painter.setBrush(_color(TEXT, 225))
-        painter.drawEllipse(
-            QPointF(center.x() - radius * 0.25, center.y() - radius * 0.25),
-            radius * 0.27,
-            radius * 0.27,
+        # Fallback тоже остаётся без подложки: логотип всегда лежит прямо на
+        # графите, даже если PNG временно недоступен.
+        rect = QRectF(self.rect()).adjusted(3.0, 3.0, -3.0, -3.0)
+        painter.setPen(QPen(_color(BRONZE), max(1.4, rect.width() * 0.07)))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        lens_radius = rect.width() * 0.18
+        left = QPointF(rect.center().x() - lens_radius, rect.center().y() + 1.0)
+        right = QPointF(rect.center().x() + lens_radius, rect.center().y() + 1.0)
+        painter.drawEllipse(left, lens_radius, lens_radius)
+        painter.drawEllipse(right, lens_radius, lens_radius)
+        painter.drawLine(
+            QPointF(left.x() + lens_radius, left.y()),
+            QPointF(right.x() - lens_radius, right.y()),
         )
 
 
@@ -267,7 +271,7 @@ class ToolIconButton(QAbstractButton):
                 background = _color(BRONZE, 42)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(background)
-        painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 9, 9)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 6, 6)
 
         glyph = _color(BRONZE, int(185 + 65 * self._hover))
         if self.kind == "close" and self._hover > 0.01:
@@ -330,6 +334,9 @@ class SegmentedControl(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        font = QFont(self.font())
+        font.setCapitalization(QFont.Capitalization.AllUppercase)
+        self.setFont(font)
 
     def sizeHint(self) -> QSize:
         widths = [self.fontMetrics().horizontalAdvance(label) + 24 for label in self.labels]
@@ -399,7 +406,7 @@ class SegmentedControl(QWidget):
         outer = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         painter.setPen(QPen(_color(BRONZE, 70), 1))
         painter.setBrush(_color(BACKGROUND, 185))
-        painter.drawRoundedRect(outer, 10, 10)
+        painter.drawRoundedRect(outer, 6, 6)
 
         segment_width = outer.width() / len(self.values)
         slider = QRectF(
@@ -413,7 +420,7 @@ class SegmentedControl(QWidget):
         gradient.setColorAt(1.0, _color(PRIMARY_PRESSED, 242))
         painter.setPen(QPen(_color(BRONZE, 82), 1))
         painter.setBrush(gradient)
-        painter.drawRoundedRect(slider, 8, 8)
+        painter.drawRoundedRect(slider, 5, 5)
 
         font = QFont(self.font())
         font.setPixelSize(11)
@@ -436,7 +443,7 @@ class SegmentedControl(QWidget):
         if self.hasFocus():
             painter.setPen(QPen(_color(KHAKI, 205), 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(outer.adjusted(1, 1, -1, -1), 9, 9)
+            painter.drawRoundedRect(outer.adjusted(1, 1, -1, -1), 5, 5)
 
 
 class StatusPill(QWidget):
@@ -532,7 +539,7 @@ class VideoCanvas(QWidget):
         self._overlay_opacity = 1.0
         self._state = "connecting"
         self._detail = "Подключение к камере…"
-        self._corner_radius = 20.0
+        self._corner_radius = 8.0
 
         self._frame_animation = QVariantAnimation(self)
         self._frame_animation.setDuration(360)
@@ -610,8 +617,8 @@ class VideoCanvas(QWidget):
         painter.setBrush(_color(BRONZE, 12))
         painter.drawRoundedRect(
             QRectF(center.x() - 29, center.y() - 22, 58, 44),
-            13,
-            13,
+            6,
+            6,
         )
         painter.setBrush(_color(KHAKI, 52))
         painter.drawEllipse(center, 12, 12)
@@ -670,7 +677,7 @@ class VideoCanvas(QWidget):
 
         painter.setPen(QPen(_color(BRONZE, 76), 1))
         painter.setBrush(_color(SURFACE, 238))
-        painter.drawRoundedRect(card, 16, 16)
+        painter.drawRoundedRect(card, 6, 6)
 
         title_font = QFont(self.font())
         title_font.setPixelSize(14)
@@ -750,7 +757,7 @@ class TitleBar(QWidget):
         layout.setContentsMargins(16, 0, 10, 0)
         layout.setSpacing(8)
 
-        self.logo = LogoGlyph(27, self)
+        self.logo = LogoGlyph(35, self)
         layout.addWidget(self.logo)
         self.title_label = QLabel(camera_name, self)
         self.title_label.setObjectName("appTitle")
