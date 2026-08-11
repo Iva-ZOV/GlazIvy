@@ -9,10 +9,21 @@ from collections.abc import Callable
 from dataclasses import replace
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QTimer, Qt, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QEasingCurve,
+    QObject,
+    QPoint,
+    QPropertyAnimation,
+    QRectF,
+    QTimer,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QCloseEvent,
+    QCursor,
     QKeySequence,
     QMouseEvent,
     QPaintEvent,
@@ -20,7 +31,15 @@ from PySide6.QtGui import (
     QResizeEvent,
     QShortcut,
 )
-from PySide6.QtWidgets import QApplication, QFrame, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..autostart import AutostartError, set_autostart
 from ..config import AppConfig, CameraConfig, ConfigError, ConfigStore
@@ -34,6 +53,7 @@ from .dialogs import (
     OnvifProgressDialog,
     SettingsDialog,
 )
+from .widgets import ToolIconButton
 
 
 class _OnvifTaskSignals(QObject):
@@ -79,6 +99,9 @@ class _OnvifTask:
 class MainWindow(QWidget):
     RESIZE_MARGIN = 11
     WINDOW_MARGIN = 18
+    FULLSCREEN_OVERLAY_WIDTH = 150
+    FULLSCREEN_OVERLAY_HEIGHT = 54
+    FULLSCREEN_OVERLAY_MARGIN = 10
 
     def __init__(
         self,
@@ -98,6 +121,9 @@ class MainWindow(QWidget):
         self._onvif_cancelled = False
         self._onvif_success_callback: Callable[[object], None] | None = None
         self._onvif_failure_callback: Callable[[], None] | None = None
+        self._fullscreen_overlay_target_visible = False
+        self._fullscreen_cursor_hidden = False
+        self._application_event_filter_installed = False
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(application_icon())
@@ -136,12 +162,67 @@ class MainWindow(QWidget):
         self.title_bar.set_camera_count(self.board.camera_count())
         self.title_bar.set_compact(self.width() < 1080)
 
+        self.fullscreen_overlay = QWidget(self)
+        self.fullscreen_overlay.setObjectName("fullscreenOverlay")
+        self.fullscreen_overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.fullscreen_overlay.setFixedHeight(self.FULLSCREEN_OVERLAY_HEIGHT)
+        self.fullscreen_overlay.setMouseTracking(True)
+        fullscreen_layout = QHBoxLayout(self.fullscreen_overlay)
+        fullscreen_layout.setContentsMargins(12, 10, 12, 10)
+        fullscreen_layout.setSpacing(6)
+        fullscreen_layout.addStretch(1)
+        self.fullscreen_minimize_button = ToolIconButton(
+            "minimize",
+            "Свернуть",
+            self.fullscreen_overlay,
+        )
+        self.fullscreen_windowed_button = ToolIconButton(
+            "windowed",
+            "Оконный режим",
+            self.fullscreen_overlay,
+        )
+        self.fullscreen_close_button = ToolIconButton(
+            "close",
+            "Закрыть",
+            self.fullscreen_overlay,
+        )
+        for button in (
+            self.fullscreen_minimize_button,
+            self.fullscreen_windowed_button,
+            self.fullscreen_close_button,
+        ):
+            fullscreen_layout.addWidget(button)
+
+        self._fullscreen_overlay_effect = QGraphicsOpacityEffect(
+            self.fullscreen_overlay
+        )
+        self._fullscreen_overlay_effect.setOpacity(0.0)
+        self.fullscreen_overlay.setGraphicsEffect(self._fullscreen_overlay_effect)
+        self._fullscreen_overlay_animation = QPropertyAnimation(
+            self._fullscreen_overlay_effect,
+            b"opacity",
+            self,
+        )
+        self._fullscreen_overlay_animation.setDuration(180)
+        self._fullscreen_overlay_animation.setEasingCurve(
+            QEasingCurve.Type.OutCubic
+        )
+        self._fullscreen_overlay_animation.finished.connect(
+            self._fullscreen_overlay_animation_finished
+        )
+        self.fullscreen_overlay.hide()
+
         self.title_bar.add_camera_clicked.connect(self.add_camera)
         self.title_bar.find_cameras_clicked.connect(self.find_cameras)
         self.title_bar.settings_clicked.connect(self.open_board_settings)
         self.title_bar.fullscreen_clicked.connect(self.toggle_fullscreen)
         self.title_bar.minimize_clicked.connect(self.showMinimized)
         self.title_bar.close_clicked.connect(self.close)
+        self.fullscreen_minimize_button.clicked.connect(
+            self._minimize_from_fullscreen
+        )
+        self.fullscreen_windowed_button.clicked.connect(self.toggle_fullscreen)
+        self.fullscreen_close_button.clicked.connect(self.close)
         self.board.camera_count_changed.connect(self.title_bar.set_camera_count)
         self.board.layout_changed.connect(self._schedule_save)
         self.board.settings_requested.connect(self.open_camera_settings)
@@ -158,6 +239,19 @@ class MainWindow(QWidget):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(350)
         self._save_timer.timeout.connect(self._persist_current_config)
+
+        self._fullscreen_idle_timer = QTimer(self)
+        self._fullscreen_idle_timer.setSingleShot(True)
+        self._fullscreen_idle_timer.setInterval(2800)
+        self._fullscreen_idle_timer.timeout.connect(self._fullscreen_idle_timeout)
+
+        for widget in (self, *self.findChildren(QWidget)):
+            widget.setMouseTracking(True)
+        application = QApplication.instance()
+        if application is not None:
+            application.installEventFilter(self)
+            self._application_event_filter_installed = True
+        self._position_fullscreen_overlay()
 
         if load_error:
             QTimer.singleShot(
@@ -573,6 +667,131 @@ class MainWindow(QWidget):
                 pass
             QMessageBox.warning(self, APP_NAME, str(exc))
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            self.isFullScreen()
+            and not self.isMinimized()
+            and self.isActiveWindow()
+            and event.type() in (QEvent.Type.Enter, QEvent.Type.MouseMove)
+            and isinstance(watched, QWidget)
+            and watched.window() is self
+        ):
+            self._register_fullscreen_activity()
+        return super().eventFilter(watched, event)
+
+    def _position_fullscreen_overlay(self) -> None:
+        self.fullscreen_overlay.setGeometry(
+            max(
+                self.FULLSCREEN_OVERLAY_MARGIN,
+                self.width()
+                - self.FULLSCREEN_OVERLAY_WIDTH
+                - self.FULLSCREEN_OVERLAY_MARGIN,
+            ),
+            self.FULLSCREEN_OVERLAY_MARGIN,
+            self.FULLSCREEN_OVERLAY_WIDTH,
+            self.FULLSCREEN_OVERLAY_HEIGHT,
+        )
+        if self.fullscreen_overlay.isVisible():
+            self.fullscreen_overlay.raise_()
+
+    def _set_fullscreen_cursor_hidden(self, hidden: bool) -> None:
+        if hidden == self._fullscreen_cursor_hidden:
+            return
+        self._fullscreen_cursor_hidden = hidden
+        if hidden:
+            QApplication.setOverrideCursor(QCursor(Qt.CursorShape.BlankCursor))
+        else:
+            QApplication.restoreOverrideCursor()
+
+    def _set_fullscreen_overlay_visible(
+        self,
+        visible: bool,
+        *,
+        animate: bool = True,
+    ) -> None:
+        if visible and (not self.isFullScreen() or self.isMinimized()):
+            return
+        if visible == self._fullscreen_overlay_target_visible:
+            if visible:
+                self.fullscreen_overlay.show()
+                self.fullscreen_overlay.raise_()
+            return
+
+        self._fullscreen_overlay_target_visible = visible
+        self._fullscreen_overlay_animation.stop()
+        target_opacity = 1.0 if visible else 0.0
+        if visible:
+            self._position_fullscreen_overlay()
+            self.fullscreen_overlay.show()
+            self.fullscreen_overlay.raise_()
+
+        if (
+            not animate
+            or abs(self._fullscreen_overlay_effect.opacity() - target_opacity) < 0.01
+        ):
+            self._fullscreen_overlay_effect.setOpacity(target_opacity)
+            self._fullscreen_overlay_animation_finished()
+            return
+
+        self._fullscreen_overlay_animation.setStartValue(
+            self._fullscreen_overlay_effect.opacity()
+        )
+        self._fullscreen_overlay_animation.setEndValue(target_opacity)
+        self._fullscreen_overlay_animation.start()
+
+    def _fullscreen_overlay_animation_finished(self) -> None:
+        if self._fullscreen_overlay_target_visible:
+            self._fullscreen_overlay_effect.setOpacity(1.0)
+            self.fullscreen_overlay.show()
+            self.fullscreen_overlay.raise_()
+            return
+        self._fullscreen_overlay_effect.setOpacity(0.0)
+        self.fullscreen_overlay.hide()
+
+    def _register_fullscreen_activity(self) -> None:
+        if not self.isFullScreen() or self.isMinimized():
+            return
+        self._set_fullscreen_cursor_hidden(False)
+        self._set_fullscreen_overlay_visible(True)
+        self._fullscreen_idle_timer.start()
+
+    def _fullscreen_idle_timeout(self) -> None:
+        if not self.isFullScreen() or self.isMinimized():
+            self._deactivate_fullscreen_ui()
+            return
+        if not self.isActiveWindow():
+            self._set_fullscreen_cursor_hidden(False)
+            return
+        if (
+            self.fullscreen_overlay.underMouse()
+            or QApplication.mouseButtons() != Qt.MouseButton.NoButton
+        ):
+            self._set_fullscreen_cursor_hidden(False)
+            self._fullscreen_idle_timer.start()
+            return
+        self._set_fullscreen_cursor_hidden(True)
+        self._set_fullscreen_overlay_visible(False)
+
+    def _activate_fullscreen_ui(self) -> None:
+        if not self.isFullScreen() or self.isMinimized():
+            return
+        self.title_bar.hide()
+        self._position_fullscreen_overlay()
+        self._register_fullscreen_activity()
+
+    def _deactivate_fullscreen_ui(self) -> None:
+        self._fullscreen_idle_timer.stop()
+        self._fullscreen_overlay_animation.stop()
+        self._fullscreen_overlay_target_visible = False
+        self._fullscreen_overlay_effect.setOpacity(0.0)
+        self.fullscreen_overlay.hide()
+        self._set_fullscreen_cursor_hidden(False)
+
+    def _minimize_from_fullscreen(self) -> None:
+        self._fullscreen_idle_timer.stop()
+        self._set_fullscreen_cursor_hidden(False)
+        self.showMinimized()
+
     def _escape_pressed(self) -> None:
         # В обычном режиме Esc намеренно ничего не делает и не закрывает окно.
         if self.isFullScreen():
@@ -580,6 +799,7 @@ class MainWindow(QWidget):
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
+            self._deactivate_fullscreen_ui()
             self.title_bar.show()
             if self._was_maximized_before_fullscreen:
                 self.showMaximized()
@@ -589,6 +809,7 @@ class MainWindow(QWidget):
             self._was_maximized_before_fullscreen = self.isMaximized()
             self.title_bar.hide()
             self.showFullScreen()
+            QTimer.singleShot(0, self._activate_fullscreen_ui)
         QTimer.singleShot(0, self._sync_window_chrome)
 
     def toggle_maximized(self) -> None:
@@ -608,11 +829,25 @@ class MainWindow(QWidget):
         self.surface.style().unpolish(self.surface)
         self.surface.style().polish(self.surface)
         self.board.set_corner_radius(0.0 if flat else 20.0)
+        if self.isFullScreen():
+            self.title_bar.hide()
+            self._position_fullscreen_overlay()
+            if self.isMinimized() or not self.isActiveWindow():
+                self._fullscreen_idle_timer.stop()
+                self._set_fullscreen_cursor_hidden(False)
+            else:
+                self._register_fullscreen_activity()
+        else:
+            self._deactivate_fullscreen_ui()
+            self.title_bar.show()
         self.update()
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange:
+        if event.type() in (
+            QEvent.Type.ActivationChange,
+            QEvent.Type.WindowStateChange,
+        ):
             QTimer.singleShot(0, self._sync_window_chrome)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -642,6 +877,8 @@ class MainWindow(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "title_bar"):
             self.title_bar.set_compact(self.width() < 1080)
+        if hasattr(self, "fullscreen_overlay"):
+            self._position_fullscreen_overlay()
 
     def _resize_edges(self, position: QPoint) -> Qt.Edge:
         if self.isMaximized() or self.isFullScreen():
@@ -695,6 +932,12 @@ class MainWindow(QWidget):
     def shutdown(self) -> None:
         if self._shutting_down:
             return
+        self._deactivate_fullscreen_ui()
+        if self._application_event_filter_installed:
+            application = QApplication.instance()
+            if application is not None:
+                application.removeEventFilter(self)
+            self._application_event_filter_installed = False
         needs_save = self._config_dirty or self._save_timer.isActive()
         self._save_timer.stop()
         if needs_save:

@@ -151,6 +151,9 @@ class ToolIconButton(QAbstractButton):
                 y = cy + sy * 5
                 painter.drawLine(QPointF(x, y), QPointF(x - sx * 3.5, y))
                 painter.drawLine(QPointF(x, y), QPointF(x, y - sy * 3.5))
+        elif self.kind == "windowed":
+            painter.drawRoundedRect(QRectF(cx - 5.5, cy - 4.5, 11, 9), 1.2, 1.2)
+            painter.drawLine(QPointF(cx - 5, cy - 1.5), QPointF(cx + 5, cy - 1.5))
         elif self.kind == "settings":
             painter.drawEllipse(QPointF(cx, cy), 3.2, 3.2)
             painter.drawEllipse(QPointF(cx, cy), 6.0, 6.0)
@@ -546,21 +549,11 @@ class VideoCanvas(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self._corner_radius > 0.0:
-            # Верх примыкает к title bar, скругляются только нижние углы.
-            # WindingFill обязателен: иначе пересечение двух подпутей по
-            # правилу OddEvenFill вычитается, и клип оставляет лишь нижнюю
-            # полосу высотой в радиус — из-за чего видео обрезается снизу.
+            # WindingFill сохраняем обязательно: клип живого видео уже ломался
+            # при неявном возврате к OddEvenFill.
             clip = QPainterPath()
             clip.setFillRule(Qt.FillRule.WindingFill)
             clip.addRoundedRect(QRectF(self.rect()), self._corner_radius, self._corner_radius)
-            clip.addRect(
-                QRectF(
-                    0,
-                    0,
-                    self.width(),
-                    max(0.0, self.height() - self._corner_radius),
-                )
-            )
             painter.setClipPath(clip)
         self._draw_background(painter)
         self._draw_frame(painter)

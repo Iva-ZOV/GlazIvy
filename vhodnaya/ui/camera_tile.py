@@ -4,9 +4,34 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPaintEvent, QPainter, QPen, QResizeEvent
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import (
+    QEvent,
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QTimer,
+    Qt,
+    Signal,
+)
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QMouseEvent,
+    QPaintEvent,
+    QPainter,
+    QPen,
+    QResizeEvent,
+)
+from PySide6.QtWidgets import (
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..config import CameraConfig, CameraGeometry, ConfigError
 from ..video import CameraReader
@@ -32,6 +57,7 @@ class CameraTile(QWidget):
     MINIMUM_HEIGHT = 320
     RESIZE_MARGIN = 8
     HEADER_HEIGHT = 54
+    HEADER_IDLE_TIMEOUT_MS = 2800
 
     def __init__(self, config: CameraConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -45,6 +71,8 @@ class CameraTile(QWidget):
         self._press_global = QPoint()
         self._initial_geometry = QRect()
         self._drag_targets: set[QWidget] = set()
+        self._header_target_visible = False
+        self._information_overlays_target_visible = True
 
         self.setObjectName("cameraTile")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -57,6 +85,7 @@ class CameraTile(QWidget):
 
         self.header = QWidget(self)
         self.header.setObjectName("cameraTileHeader")
+        self.header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.header.setFixedHeight(self.HEADER_HEIGHT)
         header_layout = QHBoxLayout(self.header)
         header_layout.setContentsMargins(12, 0, 8, 0)
@@ -74,8 +103,7 @@ class CameraTile(QWidget):
         )
         header_layout.addWidget(self.name_label, 1)
 
-        self.status = StatusPill(self.header)
-        header_layout.addWidget(self.status)
+        self.status = StatusPill(self)
         self.transport_control = SegmentedControl(
             ("TCP", "UDP"),
             ("tcp", "udp"),
@@ -98,10 +126,26 @@ class CameraTile(QWidget):
             self.header,
         )
         header_layout.addWidget(self.settings_button)
-        root.addWidget(self.header)
 
-        # VideoCanvas остаётся тем же рабочим виджетом. Меняется только его
-        # минимальный размер, потому что теперь он находится внутри плитки.
+        self._header_effect = QGraphicsOpacityEffect(self.header)
+        self._header_effect.setOpacity(0.0)
+        self.header.setGraphicsEffect(self._header_effect)
+        self._header_animation = QPropertyAnimation(
+            self._header_effect,
+            b"opacity",
+            self,
+        )
+        self._header_animation.setDuration(180)
+        self._header_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._header_animation.finished.connect(self._header_animation_finished)
+        self.header.hide()
+
+        self._header_idle_timer = QTimer(self)
+        self._header_idle_timer.setSingleShot(True)
+        self._header_idle_timer.setInterval(self.HEADER_IDLE_TIMEOUT_MS)
+        self._header_idle_timer.timeout.connect(self._header_idle_timeout)
+
+        # VideoCanvas занимает всю плитку, а шапка и индикаторы лежат поверх него.
         self.video = VideoCanvas(self)
         self.video.setMinimumSize(0, 0)
         self.video.unsetCursor()
@@ -114,6 +158,30 @@ class CameraTile(QWidget):
         self.clock_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.clock_label.setContentsMargins(9, 4, 9, 4)
         self.clock_label.raise_()
+
+        self._status_effect = QGraphicsOpacityEffect(self.status)
+        self._status_effect.setOpacity(1.0)
+        self.status.setGraphicsEffect(self._status_effect)
+        self._status_animation = QPropertyAnimation(
+            self._status_effect,
+            b"opacity",
+            self,
+        )
+        self._status_animation.setDuration(180)
+        self._status_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._status_animation.finished.connect(self._status_animation_finished)
+
+        self._clock_effect = QGraphicsOpacityEffect(self.clock_label)
+        self._clock_effect.setOpacity(1.0)
+        self.clock_label.setGraphicsEffect(self._clock_effect)
+        self._clock_animation = QPropertyAnimation(
+            self._clock_effect,
+            b"opacity",
+            self,
+        )
+        self._clock_animation.setDuration(180)
+        self._clock_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._clock_animation.finished.connect(self._clock_animation_finished)
 
         self._clock_timer = QTimer(self)
         self._clock_timer.setInterval(1000)
@@ -139,6 +207,7 @@ class CameraTile(QWidget):
         }
         self._install_pointer_filters()
         self._sync_config_widgets()
+        self._position_overlays()
         QTimer.singleShot(0, self.restart_stream)
 
     @staticmethod
@@ -168,8 +237,152 @@ class CameraTile(QWidget):
     def _event_position(self, event: QMouseEvent) -> QPoint:
         return self.mapFromGlobal(event.globalPosition().toPoint())
 
+    def _pointer_inside(self) -> bool:
+        return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+
+    def _pointer_over_header(self) -> bool:
+        position = self.header.mapFromGlobal(QCursor.pos())
+        return self.header.isVisible() and self.header.rect().contains(position)
+
+    def _set_information_overlays_visible(
+        self,
+        visible: bool,
+        *,
+        animate: bool = True,
+    ) -> None:
+        if visible == self._information_overlays_target_visible:
+            return
+
+        self._information_overlays_target_visible = visible
+        target_opacity = 1.0 if visible else 0.0
+        self._status_animation.stop()
+        self._clock_animation.stop()
+
+        if visible:
+            self.status.show()
+            self.status.raise_()
+            if self.config.show_clock:
+                self.clock_label.show()
+                self.clock_label.raise_()
+
+        if not animate or abs(self._status_effect.opacity() - target_opacity) < 0.01:
+            self._status_effect.setOpacity(target_opacity)
+            self._status_animation_finished()
+        else:
+            self._status_animation.setStartValue(self._status_effect.opacity())
+            self._status_animation.setEndValue(target_opacity)
+            self._status_animation.start()
+
+        if not self.config.show_clock:
+            self._clock_effect.setOpacity(target_opacity)
+            self.clock_label.hide()
+        elif not animate or abs(self._clock_effect.opacity() - target_opacity) < 0.01:
+            self._clock_effect.setOpacity(target_opacity)
+            self._clock_animation_finished()
+        else:
+            self._clock_animation.setStartValue(self._clock_effect.opacity())
+            self._clock_animation.setEndValue(target_opacity)
+            self._clock_animation.start()
+
+    def _status_animation_finished(self) -> None:
+        if self._information_overlays_target_visible:
+            self._status_effect.setOpacity(1.0)
+            self.status.show()
+            self.status.raise_()
+            return
+        self._status_effect.setOpacity(0.0)
+        self.status.hide()
+
+    def _clock_animation_finished(self) -> None:
+        if self._information_overlays_target_visible and self.config.show_clock:
+            self._clock_effect.setOpacity(1.0)
+            self.clock_label.show()
+            self.clock_label.raise_()
+            return
+        self._clock_effect.setOpacity(0.0)
+        self.clock_label.hide()
+
+    def _register_header_activity(self) -> None:
+        if self._shutting_down:
+            return
+        self._set_header_visible(True)
+        self._header_idle_timer.start()
+
+    def _header_idle_timeout(self) -> None:
+        if (
+            self._shutting_down
+            or self._interaction is not None
+            or self._pointer_over_header()
+        ):
+            return
+        self._set_header_visible(False)
+
+    def _set_header_visible(self, visible: bool, *, animate: bool = True) -> None:
+        if not visible and self._interaction is not None:
+            return
+        if visible == self._header_target_visible:
+            if visible:
+                self.header.raise_()
+            return
+
+        self._header_target_visible = visible
+        self._header_animation.stop()
+        self._set_information_overlays_visible(not visible, animate=animate)
+        target_opacity = 1.0 if visible else 0.0
+        if visible:
+            self.header.setEnabled(True)
+            self.header.show()
+            self.header.raise_()
+        elif self.header.isVisible():
+            self.header.raise_()
+
+        if not animate or abs(self._header_effect.opacity() - target_opacity) < 0.01:
+            self._header_effect.setOpacity(target_opacity)
+            self._header_animation_finished()
+            return
+
+        self._header_animation.setStartValue(self._header_effect.opacity())
+        self._header_animation.setEndValue(target_opacity)
+        self._header_animation.start()
+
+    def _header_animation_finished(self) -> None:
+        if self._header_target_visible:
+            self._header_effect.setOpacity(1.0)
+            self.header.show()
+            self.header.raise_()
+            return
+        self._header_effect.setOpacity(0.0)
+        self.header.setEnabled(False)
+        self.header.hide()
+
+    def _sync_header_hover(self) -> None:
+        if self._shutting_down:
+            return
+        if self._pointer_inside():
+            self._register_header_activity()
+            return
+        self._header_idle_timer.stop()
+        self._set_header_visible(False)
+
+    def _position_overlays(self) -> None:
+        self.header.setGeometry(1, 1, max(0, self.width() - 2), self.HEADER_HEIGHT)
+        self.status.adjustSize()
+        self.status.move(12, 12)
+        self.status.raise_()
+        if self.header.isVisible():
+            self.header.raise_()
+
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         event_type = event.type()
+        if event_type in (
+            QEvent.Type.Enter,
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonPress,
+        ):
+            self._register_header_activity()
+        elif event_type == QEvent.Type.Leave:
+            QTimer.singleShot(0, self._sync_header_hover)
+
         if event_type == QEvent.Type.MouseButtonPress:
             mouse_event = event  # type: ignore[assignment]
             if mouse_event.button() == Qt.MouseButton.LeftButton:  # type: ignore[attr-defined]
@@ -256,6 +469,7 @@ class CameraTile(QWidget):
         global_position: QPoint,
         edges: Qt.Edge = Qt.Edge(0),
     ) -> None:
+        self._set_header_visible(True)
         self._interaction = mode
         self._resize_edges_value = edges
         self._press_global = global_position
@@ -307,6 +521,7 @@ class CameraTile(QWidget):
         self._resize_edges_value = Qt.Edge(0)
         self.releaseMouse()
         self.unsetCursor()
+        QTimer.singleShot(0, self._sync_header_hover)
         if changed:
             self.layout_changed.emit(self.config.camera_id)
 
@@ -344,7 +559,12 @@ class CameraTile(QWidget):
         self.name_label.setToolTip(self.config.camera_name)
         self.quality_control.set_value(self.config.quality, animate=True)
         self.transport_control.set_value(self.config.transport, animate=True)
-        self.clock_label.setVisible(self.config.show_clock)
+        self._clock_animation.stop()
+        clock_visible = (
+            self.config.show_clock and self._information_overlays_target_visible
+        )
+        self._clock_effect.setOpacity(1.0 if clock_visible else 0.0)
+        self.clock_label.setVisible(clock_visible)
         self._update_clock()
 
     def apply_config(self, config: CameraConfig) -> None:
@@ -379,6 +599,11 @@ class CameraTile(QWidget):
         if not self.config.is_configured():
             self.settings_requested.emit(self.config.camera_id)
 
+    def _set_status_state(self, state: str) -> None:
+        self.status.set_state(state)
+        self.status.adjustSize()
+        self._position_overlays()
+
     def restart_stream(self) -> None:
         if self._shutting_down:
             return
@@ -389,7 +614,7 @@ class CameraTile(QWidget):
         self._generation += 1
         generation = self._generation
         if not self.config.is_configured():
-            self.status.set_state("unconfigured")
+            self._set_status_state("unconfigured")
             detail = (
                 "Откройте настройки по шестерёнке и введите логин и пароль ONVIF."
                 if self.config.source == "onvif"
@@ -404,7 +629,7 @@ class CameraTile(QWidget):
         try:
             url = self.config.build_rtsp_url()
         except ConfigError as exc:
-            self.status.set_state("offline")
+            self._set_status_state("offline")
             self.video.set_stream_state("offline", str(exc))
             return
 
@@ -413,7 +638,7 @@ class CameraTile(QWidget):
             if self.config.quality == "hd"
             else "Открываем SD-поток"
         )
-        self.status.set_state("connecting")
+        self._set_status_state("connecting")
         self.video.set_stream_state("connecting", detail)
 
         reader = CameraReader(
@@ -437,7 +662,7 @@ class CameraTile(QWidget):
     def _on_state_changed(self, state: str, detail: str, generation: int) -> None:
         if generation != self._generation or self._shutting_down:
             return
-        self.status.set_state(state)
+        self._set_status_state(state)
         self.video.set_stream_state(state, detail)
 
     def _on_reader_finished(self, generation: int) -> None:
@@ -469,6 +694,8 @@ class CameraTile(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "clock_label"):
             self._position_clock()
+        if hasattr(self, "header"):
+            self._position_overlays()
 
     def paintEvent(self, event: QPaintEvent) -> None:
         del event
@@ -494,6 +721,10 @@ class CameraTile(QWidget):
             return
         self._shutting_down = True
         self._generation += 1
+        self._header_idle_timer.stop()
+        self._header_animation.stop()
+        self._status_animation.stop()
+        self._clock_animation.stop()
         self._clock_timer.stop()
         self._cleanup_timer.stop()
         if self._interaction is not None:
