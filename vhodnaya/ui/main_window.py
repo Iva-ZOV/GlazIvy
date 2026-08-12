@@ -11,8 +11,10 @@ from urllib.parse import urlsplit
 
 from PySide6.QtCore import (
     QEvent,
+    QEasingCurve,
     QObject,
     QPoint,
+    QPropertyAnimation,
     QRectF,
     QTimer,
     Qt,
@@ -21,6 +23,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QCloseEvent,
+    QCursor,
     QKeySequence,
     QMouseEvent,
     QPaintEvent,
@@ -30,6 +33,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QGraphicsOpacityEffect,
     QMessageBox,
     QVBoxLayout,
     QWidget,
@@ -94,6 +98,9 @@ class _OnvifTask:
 class MainWindow(QWidget):
     RESIZE_MARGIN = 11
     WINDOW_MARGIN = 18
+    FULLSCREEN_PANEL_HEIGHT = 62
+    FULLSCREEN_PANEL_IDLE_TIMEOUT_MS = 2800
+    FULLSCREEN_POINTER_POLL_MS = 150
 
     def __init__(
         self,
@@ -139,6 +146,7 @@ class MainWindow(QWidget):
         )
         self.surface = GrainFrame(self)
         self.surface.setObjectName("windowSurface")
+        self.surface.installEventFilter(self)
         self.outer_layout.addWidget(self.surface)
 
         self.surface_layout = QVBoxLayout(self.surface)
@@ -157,6 +165,37 @@ class MainWindow(QWidget):
         )
         self.surface_layout.addWidget(self.board, 1)
         self.title_bar.set_compact(self.width() < 1080)
+
+        self._title_bar_overlay = False
+        self._title_bar_target_visible = True
+        self._title_bar_effect = QGraphicsOpacityEffect(self.title_bar)
+        self._title_bar_effect.setOpacity(1.0)
+        self.title_bar.setGraphicsEffect(self._title_bar_effect)
+        self._title_bar_animation = QPropertyAnimation(
+            self._title_bar_effect,
+            b"opacity",
+            self,
+        )
+        self._title_bar_animation.setDuration(180)
+        self._title_bar_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._title_bar_animation.finished.connect(
+            self._title_bar_animation_finished
+        )
+
+        self._title_bar_idle_timer = QTimer(self)
+        self._title_bar_idle_timer.setSingleShot(True)
+        self._title_bar_idle_timer.setInterval(
+            self.FULLSCREEN_PANEL_IDLE_TIMEOUT_MS
+        )
+        self._title_bar_idle_timer.timeout.connect(
+            self._title_bar_idle_timeout
+        )
+
+        self._fullscreen_pointer_timer = QTimer(self)
+        self._fullscreen_pointer_timer.setInterval(self.FULLSCREEN_POINTER_POLL_MS)
+        self._fullscreen_pointer_timer.timeout.connect(
+            self._poll_fullscreen_pointer
+        )
 
         self.title_bar.add_camera_clicked.connect(self.add_camera)
         self.title_bar.find_cameras_clicked.connect(self.find_cameras)
@@ -761,16 +800,136 @@ class MainWindow(QWidget):
         if self.isFullScreen():
             self.toggle_fullscreen()
 
+    def _position_fullscreen_title_bar(self) -> None:
+        if not self._title_bar_overlay:
+            return
+        self.title_bar.setGeometry(
+            0,
+            0,
+            max(0, self.surface.width()),
+            self.FULLSCREEN_PANEL_HEIGHT,
+        )
+        self.title_bar.raise_()
+
+    def _pointer_over_fullscreen_title_bar(self) -> bool:
+        if not self.title_bar.isVisible():
+            return False
+        position = self.title_bar.mapFromGlobal(QCursor.pos())
+        return self.title_bar.rect().contains(position)
+
+    def _set_fullscreen_title_bar_visible(
+        self,
+        visible: bool,
+        *,
+        animate: bool = True,
+    ) -> None:
+        if visible == self._title_bar_target_visible:
+            if not animate:
+                self._title_bar_animation.stop()
+                self._title_bar_effect.setOpacity(1.0 if visible else 0.0)
+                self._title_bar_animation_finished()
+                return
+            if visible:
+                self.title_bar.setEnabled(True)
+                self.title_bar.show()
+                self.title_bar.raise_()
+            return
+
+        self._title_bar_target_visible = visible
+        self._title_bar_animation.stop()
+        target_opacity = 1.0 if visible else 0.0
+        if visible:
+            self.title_bar.setEnabled(True)
+            self.title_bar.show()
+            self.title_bar.raise_()
+        elif self.title_bar.isVisible():
+            self.title_bar.raise_()
+
+        if (
+            not animate
+            or abs(self._title_bar_effect.opacity() - target_opacity) < 0.01
+        ):
+            self._title_bar_effect.setOpacity(target_opacity)
+            self._title_bar_animation_finished()
+            return
+
+        self._title_bar_animation.setStartValue(self._title_bar_effect.opacity())
+        self._title_bar_animation.setEndValue(target_opacity)
+        self._title_bar_animation.start()
+
+    def _title_bar_animation_finished(self) -> None:
+        if self._title_bar_target_visible:
+            self._title_bar_effect.setOpacity(1.0)
+            self.title_bar.setEnabled(True)
+            self.title_bar.show()
+            self.title_bar.raise_()
+            return
+        self._title_bar_effect.setOpacity(0.0)
+        self.title_bar.setEnabled(False)
+        self.title_bar.hide()
+
+    def _register_fullscreen_title_bar_activity(self) -> None:
+        if not self._title_bar_overlay:
+            return
+        self._set_fullscreen_title_bar_visible(True)
+        self._title_bar_idle_timer.start()
+
+    def _title_bar_idle_timeout(self) -> None:
+        if not self._title_bar_overlay:
+            return
+        if self._pointer_over_fullscreen_title_bar():
+            self._title_bar_idle_timer.start()
+            return
+        self._set_fullscreen_title_bar_visible(False)
+
+    def _poll_fullscreen_pointer(self) -> None:
+        if not self._title_bar_overlay:
+            return
+        position = self.surface.mapFromGlobal(QCursor.pos())
+        in_top_zone = (
+            0 <= position.x() < self.surface.width()
+            and 0 <= position.y() <= self.FULLSCREEN_PANEL_HEIGHT
+        )
+        if in_top_zone or (
+            self._title_bar_target_visible
+            and self._pointer_over_fullscreen_title_bar()
+        ):
+            self._register_fullscreen_title_bar_activity()
+
+    def _enter_fullscreen_title_bar_overlay(self) -> None:
+        if self._title_bar_overlay:
+            self._position_fullscreen_title_bar()
+            return
+        self.surface_layout.removeWidget(self.title_bar)
+        self.title_bar.setParent(self.surface)
+        self._title_bar_overlay = True
+        self._position_fullscreen_title_bar()
+        self._set_fullscreen_title_bar_visible(True, animate=False)
+        self._title_bar_idle_timer.start()
+        self._fullscreen_pointer_timer.start()
+
+    def _leave_fullscreen_title_bar_overlay(self) -> None:
+        if not self._title_bar_overlay:
+            return
+        self._fullscreen_pointer_timer.stop()
+        self._title_bar_idle_timer.stop()
+        self._title_bar_animation.stop()
+        self._set_fullscreen_title_bar_visible(True, animate=False)
+        self.surface_layout.insertWidget(0, self.title_bar)
+        self._title_bar_overlay = False
+
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():
             if self._was_maximized_before_fullscreen:
                 self.showMaximized()
             else:
                 self.showNormal()
+            self._leave_fullscreen_title_bar_overlay()
         else:
             self._was_maximized_before_fullscreen = self.isMaximized()
             self.board.set_fullscreen_reference_size(self.board.size())
             self.title_bar.set_fullscreen_mode(True)
+            self._enter_fullscreen_title_bar_overlay()
             self.showFullScreen()
         QTimer.singleShot(0, self._sync_window_chrome)
 
@@ -793,8 +952,9 @@ class MainWindow(QWidget):
         self.board.set_corner_radius(0.0 if flat else 6.0)
         self.title_bar.set_fullscreen_mode(self.isFullScreen())
         if self.isFullScreen():
-            self.title_bar.show()
+            self._enter_fullscreen_title_bar_overlay()
         else:
+            self._leave_fullscreen_title_bar_overlay()
             self.board.set_fullscreen_reference_size(None)
         self.update()
 
@@ -833,6 +993,17 @@ class MainWindow(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "title_bar"):
             self.title_bar.set_compact(self.width() < 1080)
+        if getattr(self, "_title_bar_overlay", False):
+            self._position_fullscreen_title_bar()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is getattr(self, "surface", None)
+            and event.type() == QEvent.Type.Resize
+            and getattr(self, "_title_bar_overlay", False)
+        ):
+            QTimer.singleShot(0, self._position_fullscreen_title_bar)
+        return super().eventFilter(watched, event)
 
     def _resize_edges(self, position: QPoint) -> Qt.Edge:
         if self.isMaximized() or self.isFullScreen():
@@ -886,6 +1057,9 @@ class MainWindow(QWidget):
     def shutdown(self) -> None:
         if self._shutting_down:
             return
+        self._fullscreen_pointer_timer.stop()
+        self._title_bar_idle_timer.stop()
+        self._title_bar_animation.stop()
         needs_save = self._config_dirty or self._save_timer.isActive()
         self._save_timer.stop()
         if needs_save:

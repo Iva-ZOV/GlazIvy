@@ -955,6 +955,17 @@ class VideoCanvas(QWidget):
         self._overlay_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._overlay_animation.valueChanged.connect(self._set_overlay_opacity)
 
+    def frame_aspect(self) -> float | None:
+        """Возвращает пропорцию текущего кадра, если он уже получен."""
+
+        if self._frame is None:
+            return None
+        width = self._frame.width()
+        height = self._frame.height()
+        if width <= 0 or height <= 0:
+            return None
+        return float(width) / float(height)
+
     def set_frame(self, image: object) -> None:
         first_frame = self._frame is None
         self._frame = image

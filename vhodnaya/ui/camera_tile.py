@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import (
     QEvent,
     QEasingCurve,
@@ -52,11 +54,14 @@ class CameraTile(QWidget):
     hide_requested = Signal(str)
     expand_requested = Signal(str)
 
-    MINIMUM_WIDTH = 520
-    MINIMUM_HEIGHT = 320
+    MINIMUM_WIDTH = 180
+    MINIMUM_HEIGHT = 120
     RESIZE_MARGIN = 8
     HEADER_HEIGHT = 54
     HEADER_IDLE_TIMEOUT_MS = 2800
+    NAME_VISIBLE_MINIMUM_WIDTH = 300
+    LOGO_VISIBLE_MINIMUM_WIDTH = 230
+    FALLBACK_VIDEO_ASPECT = 16 / 9
 
     def __init__(self, config: CameraConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -191,6 +196,7 @@ class CameraTile(QWidget):
         }
         self._install_pointer_filters()
         self._sync_config_widgets()
+        self._sync_header_content_visibility()
         self._position_overlays()
         QTimer.singleShot(0, self.restart_stream)
 
@@ -347,6 +353,10 @@ class CameraTile(QWidget):
         if self.header.isVisible():
             self.header.raise_()
 
+    def _sync_header_content_visibility(self) -> None:
+        self.name_label.setVisible(self.width() >= self.NAME_VISIBLE_MINIMUM_WIDTH)
+        self.logo.setVisible(self.width() >= self.LOGO_VISIBLE_MINIMUM_WIDTH)
+
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         event_type = event.type()
         if event_type in (
@@ -479,39 +489,176 @@ class CameraTile(QWidget):
 
         if self._interaction != "resize":
             return
-        x = initial.x()
-        y = initial.y()
-        right = initial.x() + initial.width()
-        bottom = initial.y() + initial.height()
         edges = self._resize_edges_value
+        horizontal = bool(edges & (Qt.Edge.LeftEdge | Qt.Edge.RightEdge))
+        vertical = bool(edges & (Qt.Edge.TopEdge | Qt.Edge.BottomEdge))
+        if not horizontal and not vertical:
+            return
+
+        aspect = self.video.frame_aspect() or self.FALLBACK_VIDEO_ASPECT
+        if not math.isfinite(aspect) or aspect <= 0.0:
+            aspect = self.FALLBACK_VIDEO_ASPECT
+
+        requested_width = float(initial.width())
+        requested_height = float(initial.height())
+        if edges & Qt.Edge.LeftEdge:
+            requested_width -= delta.x()
+        elif edges & Qt.Edge.RightEdge:
+            requested_width += delta.x()
+        if edges & Qt.Edge.TopEdge:
+            requested_height -= delta.y()
+        elif edges & Qt.Edge.BottomEdge:
+            requested_height += delta.y()
+
+        if horizontal and not vertical:
+            lead = "width"
+        elif vertical and not horizontal:
+            lead = "height"
+        else:
+            lead = "width" if abs(delta.x()) >= abs(delta.y()) else "height"
+
+        initial_right = initial.x() + initial.width()
+        initial_bottom = initial.y() + initial.height()
+        if edges & Qt.Edge.LeftEdge:
+            maximum_width = initial_right
+        elif edges & Qt.Edge.RightEdge:
+            maximum_width = board_width - initial.x()
+        else:
+            maximum_width = board_width
+        if edges & Qt.Edge.TopEdge:
+            maximum_height = initial_bottom
+        elif edges & Qt.Edge.BottomEdge:
+            maximum_height = board_height - initial.y()
+        else:
+            maximum_height = board_height
+
+        size = self._aspect_constrained_size(
+            requested_width,
+            requested_height,
+            aspect,
+            self._interaction_minimum_width,
+            self._interaction_minimum_height,
+            maximum_width,
+            maximum_height,
+            lead=lead,
+        )
+        if size is None:
+            # Для патологически маленькой доски одновременно выполнить
+            # минимумы, границы и пропорцию невозможно: мягко останавливаемся.
+            return
+        width, height = size
 
         if edges & Qt.Edge.LeftEdge:
-            x = max(
-                0,
-                min(
-                    initial.x() + delta.x(),
-                    right - self._interaction_minimum_width,
-                ),
-            )
-        if edges & Qt.Edge.RightEdge:
-            right = max(
-                x + self._interaction_minimum_width,
-                min(initial.x() + initial.width() + delta.x(), board_width),
-            )
+            x = initial_right - width
+        elif edges & Qt.Edge.RightEdge:
+            x = initial.x()
+        else:
+            center_x = initial.x() + initial.width() / 2.0
+            x = round(center_x - width / 2.0)
+            x = max(0, min(x, board_width - width))
+
         if edges & Qt.Edge.TopEdge:
-            y = max(
-                0,
-                min(
-                    initial.y() + delta.y(),
-                    bottom - self._interaction_minimum_height,
+            y = initial_bottom - height
+        elif edges & Qt.Edge.BottomEdge:
+            y = initial.y()
+        else:
+            center_y = initial.y() + initial.height() / 2.0
+            y = round(center_y - height / 2.0)
+            y = max(0, min(y, board_height - height))
+
+        self.setGeometry(x, y, width, height)
+
+    @staticmethod
+    def _aspect_constrained_size(
+        requested_width: float,
+        requested_height: float,
+        aspect: float,
+        minimum_width: int,
+        minimum_height: int,
+        maximum_width: int,
+        maximum_height: int,
+        *,
+        lead: str,
+    ) -> tuple[int, int] | None:
+        """Подбирает ближайший целочисленный размер с заданной пропорцией."""
+
+        minimum_width = max(1, int(minimum_width))
+        minimum_height = max(1, int(minimum_height))
+        maximum_width = max(0, int(maximum_width))
+        maximum_height = max(0, int(maximum_height))
+        if maximum_width < minimum_width or maximum_height < minimum_height:
+            return None
+
+        minimum_scale = max(minimum_height, minimum_width / aspect)
+        maximum_scale = min(maximum_height, maximum_width / aspect)
+
+        requested_scale = (
+            requested_width / aspect if lead == "width" else requested_height
+        )
+        if minimum_scale <= maximum_scale:
+            target_scale = max(minimum_scale, min(requested_scale, maximum_scale))
+        else:
+            # Целочисленное округление иногда оставляет допустимую пару даже
+            # при очень узком зазоре между непрерывными пределами.
+            target_scale = (minimum_scale + maximum_scale) / 2.0
+
+        height_seeds: set[int] = set()
+        width_seeds: set[int] = set()
+        for value in (target_scale, minimum_scale, maximum_scale):
+            base = math.floor(value)
+            height_seeds.update(range(base - 2, base + 4))
+        for value in (
+            target_scale * aspect,
+            minimum_scale * aspect,
+            maximum_scale * aspect,
+        ):
+            base = math.floor(value)
+            width_seeds.update(range(base - 2, base + 4))
+
+        candidates: set[tuple[int, int]] = set()
+        for height in height_seeds:
+            if not minimum_height <= height <= maximum_height:
+                continue
+            ideal_width = height * aspect
+            for width in (
+                math.floor(ideal_width),
+                round(ideal_width),
+                math.ceil(ideal_width),
+            ):
+                if minimum_width <= width <= maximum_width:
+                    candidates.add((width, height))
+        for width in width_seeds:
+            if not minimum_width <= width <= maximum_width:
+                continue
+            ideal_height = width / aspect
+            for height in (
+                math.floor(ideal_height),
+                round(ideal_height),
+                math.ceil(ideal_height),
+            ):
+                if minimum_height <= height <= maximum_height:
+                    candidates.add((width, height))
+
+        if not candidates:
+            return None
+
+        if lead == "width":
+            return min(
+                candidates,
+                key=lambda size: (
+                    abs(size[0] - target_scale * aspect),
+                    abs(size[0] / size[1] - aspect),
+                    abs(size[1] - target_scale),
                 ),
             )
-        if edges & Qt.Edge.BottomEdge:
-            bottom = max(
-                y + self._interaction_minimum_height,
-                min(initial.y() + initial.height() + delta.y(), board_height),
-            )
-        self.setGeometry(x, y, right - x, bottom - y)
+        return min(
+            candidates,
+            key=lambda size: (
+                abs(size[1] - target_scale),
+                abs(size[0] / size[1] - aspect),
+                abs(size[0] / aspect - target_scale),
+            ),
+        )
 
     def _finish_interaction(self) -> None:
         changed = self.geometry() != self._initial_geometry
@@ -700,6 +847,7 @@ class CameraTile(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if hasattr(self, "header"):
+            self._sync_header_content_visibility()
             self._position_overlays()
 
     def paintEvent(self, event: QPaintEvent) -> None:
