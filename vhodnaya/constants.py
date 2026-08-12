@@ -4,7 +4,7 @@ from __future__ import annotations
 
 APP_NAME = "Глаз Ивы"
 APP_SLUG = "GlazIvy"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 ORGANIZATION_NAME = "GlazIvy"
 
 DEFAULT_CAMERA_NAME = "Входная"
