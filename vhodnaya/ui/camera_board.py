@@ -316,7 +316,6 @@ class CameraBoard(QWidget):
     layout_changed = Signal()
     camera_count_changed = Signal(int)
     settings_requested = Signal(str)
-    quick_change_requested = Signal(str, str, str)
 
     GRID_SPACING = 10
 
@@ -416,13 +415,6 @@ class CameraBoard(QWidget):
         tile.layout_changed.connect(self._tile_layout_changed)
         tile.settings_requested.connect(
             lambda camera_id: self.settings_requested.emit(camera_id)
-        )
-        tile.quick_change_requested.connect(
-            lambda camera_id, field_name, value: self.quick_change_requested.emit(
-                camera_id,
-                field_name,
-                value,
-            )
         )
         tile.expand_requested.connect(self.toggle_camera_expanded)
 

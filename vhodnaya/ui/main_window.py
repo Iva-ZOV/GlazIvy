@@ -167,7 +167,6 @@ class MainWindow(QWidget):
         self.board.camera_count_changed.connect(self.title_bar.set_camera_count)
         self.board.layout_changed.connect(self._schedule_save)
         self.board.settings_requested.connect(self.open_camera_settings)
-        self.board.quick_change_requested.connect(self._quick_camera_change)
 
         self.fullscreen_shortcut = QShortcut(QKeySequence("F11"), self)
         self.fullscreen_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -465,27 +464,6 @@ class MainWindow(QWidget):
             added = True
         if added:
             self._persist_current_config()
-
-    def _quick_camera_change(
-        self,
-        camera_id: str,
-        field_name: str,
-        value: str,
-    ) -> None:
-        tile = self.board.tile_for(camera_id)
-        if tile is None or field_name not in {"quality", "transport"}:
-            return
-        candidate_camera = tile.config.updated(**{field_name: value})
-        candidate = self._snapshot_config(
-            replacements={camera_id: candidate_camera}
-        )
-        if not self._persist_candidate(candidate):
-            tile.restore_quick_controls()
-            return
-        applied_camera = next(
-            camera for camera in candidate.cameras if camera.camera_id == camera_id
-        )
-        tile.apply_config(applied_camera)
 
     def open_camera_settings(self, camera_id: str) -> None:
         tile = self.board.tile_for(camera_id)

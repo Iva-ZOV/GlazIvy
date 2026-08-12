@@ -37,7 +37,6 @@ from ..video import CameraReader
 from .theme import BRONZE, SURFACE_RAISED
 from .widgets import (
     LogoGlyph,
-    SegmentedControl,
     StatusPill,
     ToolIconButton,
     VideoCanvas,
@@ -50,7 +49,6 @@ class CameraTile(QWidget):
     raise_requested = Signal(str)
     layout_changed = Signal(str)
     settings_requested = Signal(str)
-    quick_change_requested = Signal(str, str, str)
     expand_requested = Signal(str)
 
     MINIMUM_WIDTH = 520
@@ -109,22 +107,12 @@ class CameraTile(QWidget):
         header_layout.addWidget(self.name_label, 1)
 
         self.status = StatusPill(self)
-        self.transport_control = SegmentedControl(
-            ("TCP", "UDP"),
-            ("tcp", "udp"),
-            config.transport,
+        self.reconnect_button = ToolIconButton(
+            "reconnect",
+            "Переподключить",
             self.header,
         )
-        self.transport_control.setToolTip("Транспорт этой камеры")
-        header_layout.addWidget(self.transport_control)
-        self.quality_control = SegmentedControl(
-            ("SD", "HD"),
-            ("sd", "hd"),
-            config.quality,
-            self.header,
-        )
-        self.quality_control.setToolTip("Качество этой камеры")
-        header_layout.addWidget(self.quality_control)
+        header_layout.addWidget(self.reconnect_button)
         self.settings_button = ToolIconButton(
             "settings",
             "Настройки камеры",
@@ -182,8 +170,7 @@ class CameraTile(QWidget):
         self.settings_button.clicked.connect(
             lambda: self.settings_requested.emit(self.config.camera_id)
         )
-        self.quality_control.value_changed.connect(self._quality_changed)
-        self.transport_control.value_changed.connect(self._transport_changed)
+        self.reconnect_button.clicked.connect(self.restart_stream)
         self.video.double_clicked.connect(self._video_double_clicked)
 
         self._drag_targets = {
@@ -607,8 +594,6 @@ class CameraTile(QWidget):
     def _sync_config_widgets(self) -> None:
         self.name_label.setText(self.config.camera_name)
         self.name_label.setToolTip(self.config.camera_name)
-        self.quality_control.set_value(self.config.quality, animate=True)
-        self.transport_control.set_value(self.config.transport, animate=True)
 
     def apply_config(self, config: CameraConfig) -> None:
         previous = self.config
@@ -617,26 +602,6 @@ class CameraTile(QWidget):
         self._sync_config_widgets()
         if reconnect or (config.is_configured() and self._current_reader is None):
             self.restart_stream()
-
-    def restore_quick_controls(self) -> None:
-        self.quality_control.set_value(self.config.quality, animate=True)
-        self.transport_control.set_value(self.config.transport, animate=True)
-
-    def _quality_changed(self, quality: str) -> None:
-        if quality != self.config.quality:
-            self.quick_change_requested.emit(
-                self.config.camera_id,
-                "quality",
-                quality,
-            )
-
-    def _transport_changed(self, transport: str) -> None:
-        if transport != self.config.transport:
-            self.quick_change_requested.emit(
-                self.config.camera_id,
-                "transport",
-                transport,
-            )
 
     def _video_double_clicked(self) -> None:
         if not self.config.is_configured():

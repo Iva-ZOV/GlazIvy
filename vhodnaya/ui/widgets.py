@@ -492,6 +492,11 @@ class ToolIconButton(QAbstractButton):
         elif self.kind == "windowed":
             painter.drawRoundedRect(QRectF(cx - 5.5, cy - 4.5, 11, 9), 1.2, 1.2)
             painter.drawLine(QPointF(cx - 5, cy - 1.5), QPointF(cx + 5, cy - 1.5))
+        elif self.kind == "reconnect":
+            painter.drawArc(QRectF(cx - 6, cy - 6, 12, 12), 120 * 16, 285 * 16)
+            tip = QPointF(cx + 4.25, cy - 4.25)
+            painter.drawLine(tip, QPointF(cx + 8.0, cy - 4.0))
+            painter.drawLine(tip, QPointF(cx + 4.5, cy - 0.25))
         elif self.kind == "settings":
             painter.drawEllipse(QPointF(cx, cy), 3.2, 3.2)
             painter.drawEllipse(QPointF(cx, cy), 6.0, 6.0)
