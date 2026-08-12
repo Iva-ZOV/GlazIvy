@@ -269,6 +269,7 @@ class CameraConfig:
     quality: str = DEFAULT_QUALITY
     stream_path: str = DEFAULT_STREAM_PATH
     show_clock: bool = True
+    on_board: bool = True
     geometry: CameraGeometry = field(default_factory=CameraGeometry)
     source: str = "template"
     stream_url_hd: str = ""
@@ -335,6 +336,8 @@ class CameraConfig:
             raise ConfigError("Порт должен быть в диапазоне от 1 до 65535.")
         if not isinstance(self.show_clock, bool):
             raise ConfigError("Параметр часов камеры должен быть логическим.")
+        if not isinstance(self.on_board, bool):
+            raise ConfigError("Параметр показа камеры на доске должен быть логическим.")
         self.geometry.validate()
 
         if self.source == "onvif":
@@ -416,7 +419,7 @@ class CameraConfig:
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    """Настройки приложения и упорядоченный список камер доски."""
+    """Настройки приложения и полный упорядоченный список камер."""
 
     cameras: tuple[CameraConfig, ...] = field(default_factory=tuple)
     autostart: bool = False
@@ -539,6 +542,7 @@ class ConfigStore:
                 "onvif_password",
             ),
             show_clock=_read_bool(payload, "show_clock", True),
+            on_board=_read_bool(payload, "on_board", True),
             geometry=CameraGeometry(
                 x=_read_int(geometry_payload, "x", 24),
                 y=_read_int(geometry_payload, "y", 24),
@@ -627,6 +631,7 @@ class ConfigStore:
             "onvif_username": camera.onvif_username,
             "onvif_password_b64": _encode_password(camera.onvif_password),
             "show_clock": camera.show_clock,
+            "on_board": camera.on_board,
             "geometry": {
                 "x": geometry.x,
                 "y": geometry.y,

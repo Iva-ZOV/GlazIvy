@@ -68,6 +68,7 @@ class _TitleBarCenterBlock(QWidget):
 class BoardTitleBar(QWidget):
     add_camera_clicked = Signal()
     find_cameras_clicked = Signal()
+    camera_list_clicked = Signal()
     settings_clicked = Signal()
     fullscreen_clicked = Signal()
     minimize_clicked = Signal()
@@ -106,6 +107,17 @@ class BoardTitleBar(QWidget):
         self.title.setObjectName("appTitle")
         set_heading_capitalization(self.title)
         left.addWidget(self.title)
+        self.camera_list_button = HeaderActionButton(
+            "Список камер",
+            "list",
+            primary=False,
+            outer_side="both",
+            parent=self._left_group,
+        )
+        self.camera_list_button.setObjectName("cameraListButton")
+        self.camera_list_button.setToolTip("Список камер")
+        self.camera_list_button.clicked.connect(self.camera_list_clicked)
+        left.addWidget(self.camera_list_button)
         self._layout.addWidget(
             self._left_group,
             0,
@@ -220,7 +232,19 @@ class BoardTitleBar(QWidget):
             return "камеры"
         return "камер"
 
-    def set_camera_count(self, count: int) -> None:
+    @staticmethod
+    def _camera_word_genitive(count: int) -> str:
+        # После «из» — родительный падеж: из 4 камер, но из 21 камеры.
+        if count % 10 == 1 and count % 100 != 11:
+            return "камеры"
+        return "камер"
+
+    def set_camera_count(self, count: int, total: int | None = None) -> None:
+        if total is not None and total > count:
+            self.camera_count.setText(
+                f"{count} из {total} {self._camera_word_genitive(total)}"
+            )
+            return
         self.camera_count.setText(f"{count} {self._camera_word(count)}")
 
     def set_compact(self, compact: bool) -> None:
@@ -243,7 +267,7 @@ class BoardTitleBar(QWidget):
             self.close_button,
         ):
             button.setFixedSize(tool_size, tool_size)
-        for button in (self.find_button, self.add_button):
+        for button in (self.camera_list_button, self.find_button, self.add_button):
             button.set_compact(compact)
         self._sync_action_buttons()
         self._sync_side_columns()
@@ -335,6 +359,7 @@ class CameraBoard(QWidget):
         self._free_geometries: dict[str, CameraGeometry] = {}
         self._layout_mode = layout_mode
         self._expanded_camera_id: str | None = None
+        self._hidden_count = 0
         self._last_raise_snapshot: tuple[str, tuple[str, ...], float] | None = None
         self._corner_radius = 6.0
         self._fullscreen_reference_size: QSize | None = None
@@ -349,6 +374,13 @@ class CameraBoard(QWidget):
 
     def camera_count(self) -> int:
         return len(self._tiles)
+
+    def set_hidden_count(self, count: int) -> None:
+        hidden_count = max(0, int(count))
+        if hidden_count == self._hidden_count:
+            return
+        self._hidden_count = hidden_count
+        self.update()
 
     def tile_for(self, camera_id: str) -> CameraTile | None:
         return self._tiles.get(camera_id)
@@ -831,7 +863,7 @@ class CameraBoard(QWidget):
         painter.drawText(
             QRectF(30, title_top, self.width() - 60, 42),
             Qt.AlignmentFlag.AlignCenter,
-            "Пока нет камер",
+            "Доска пуста",
         )
         helper_font = QFont(self.font())
         helper_font.setPixelSize(13)
@@ -842,7 +874,12 @@ class CameraBoard(QWidget):
             Qt.AlignmentFlag.AlignHCenter
             | Qt.AlignmentFlag.AlignTop
             | Qt.TextFlag.TextWordWrap,
-            "Нажмите «Найти камеры» или добавьте камеру вручную.",
+            (
+                "Все камеры скрыты. Откройте «Список камер», чтобы вернуть "
+                "их на доску."
+                if self._hidden_count
+                else "Нажмите «Найти камеры» или добавьте камеру вручную."
+            ),
         )
 
     def shutdown(self) -> None:

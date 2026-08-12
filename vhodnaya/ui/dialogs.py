@@ -336,6 +336,133 @@ class OnvifDiscoveryDialog(FramelessDialog):
         return tuple(camera for check, camera in self._rows if check.isChecked())
 
 
+class CameraListDialog(FramelessDialog):
+    """Полный список камер с мгновенным управлением видимостью на доске."""
+
+    toggle_requested = Signal(str, bool)
+    settings_requested = Signal(str)
+
+    def __init__(
+        self,
+        cameras: tuple[CameraConfig, ...],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(
+            "Список камер",
+            parent,
+            preferred_width=720,
+            preferred_height=560,
+        )
+        self._checks: dict[str, QCheckBox] = {}
+
+        content = QWidget(self.surface)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(28, 16, 22, 26)
+        layout.setSpacing(14)
+
+        title = QLabel("Все камеры", content)
+        title.setObjectName("dialogTitle")
+        set_heading_capitalization(title)
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Галочка показывает камеру на доске. Скрытая камера остаётся "
+            "в списке, её поток не подключается.",
+            content,
+        )
+        subtitle.setObjectName("dialogSubtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        self.scroll = QScrollArea(content)
+        self.scroll.setWidgetResizable(True)
+        layout.addWidget(self.scroll, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        done = QPushButton("Готово", content)
+        done.setObjectName("secondaryButton")
+        set_action_button_capitalization(done)
+        done.setDefault(True)
+        done.clicked.connect(self.accept)
+        buttons.addWidget(done)
+        layout.addLayout(buttons)
+
+        self.surface_layout.addWidget(content, 1)
+        self.refresh(cameras)
+
+    def refresh(self, cameras: tuple[CameraConfig, ...]) -> None:
+        old_rows = self.scroll.takeWidget()
+        if old_rows is not None:
+            old_rows.deleteLater()
+
+        rows_widget = QWidget(self.scroll)
+        rows_layout = QVBoxLayout(rows_widget)
+        rows_layout.setContentsMargins(2, 2, 8, 2)
+        rows_layout.setSpacing(9)
+        self._checks = {}
+
+        if not cameras:
+            empty = QLabel("Пока нет камер", rows_widget)
+            empty.setObjectName("discoveryAddress")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            rows_layout.addWidget(empty, 1)
+        else:
+            for camera in cameras:
+                row = QFrame(rows_widget)
+                row.setObjectName("discoveryRow")
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(14, 10, 14, 10)
+                row_layout.setSpacing(14)
+
+                check = QCheckBox(camera.camera_name.replace("&", "&&"), row)
+                check.setChecked(camera.on_board)
+                check.setMinimumWidth(210)
+                check.toggled.connect(
+                    lambda checked, camera_id=camera.camera_id: (
+                        self.toggle_requested.emit(camera_id, checked)
+                    )
+                )
+                row_layout.addWidget(check, 1)
+                self._checks[camera.camera_id] = check
+
+                address = QLabel(
+                    camera.host.strip() if camera.is_configured() else "не настроена",
+                    row,
+                )
+                address.setObjectName("discoveryAddress")
+                address.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                row_layout.addWidget(address)
+
+                settings = ToolIconButton(
+                    "settings",
+                    "Настройки камеры",
+                    row,
+                )
+                settings.clicked.connect(
+                    lambda _checked=False, camera_id=camera.camera_id: (
+                        self.settings_requested.emit(camera_id)
+                    )
+                )
+                row_layout.addWidget(settings)
+                rows_layout.addWidget(row)
+            rows_layout.addStretch(1)
+
+        self.scroll.setWidget(rows_widget)
+
+    def set_camera_on_board(self, camera_id: str, on_board: bool) -> None:
+        check = self._checks.get(camera_id)
+        if check is None or check.isChecked() == on_board:
+            return
+        check.blockSignals(True)
+        try:
+            check.setChecked(on_board)
+        finally:
+            check.blockSignals(False)
+
+
 class SettingsDialog(FramelessDialog):
     """Настройки выбранной камеры; удаление не требует валидной формы."""
 

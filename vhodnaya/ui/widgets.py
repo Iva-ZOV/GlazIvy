@@ -124,7 +124,7 @@ def _draw_header_action_icon(
     rect: QRectF,
     color: QColor,
 ) -> None:
-    """Рисует 18-px глифы поиска и добавления чистыми QPainter-примитивами."""
+    """Рисует 18-px глифы действий панели чистыми QPainter-примитивами."""
 
     painter.save()
     painter.setPen(
@@ -159,6 +159,15 @@ def _draw_header_action_icon(
             QPointF(center.x(), center.y() - 3.2),
             QPointF(center.x(), center.y() + 3.2),
         )
+    elif kind == "list":
+        painter.setBrush(color)
+        for offset in (-5.0, 0.0, 5.0):
+            y = center.y() + offset
+            painter.drawEllipse(QPointF(center.x() - 5.8, y), 0.85, 0.85)
+            painter.drawLine(
+                QPointF(center.x() - 2.5, y),
+                QPointF(center.x() + 6.2, y),
+            )
     painter.restore()
 
 
@@ -511,7 +520,7 @@ class ToolIconButton(QAbstractButton):
 
 
 class HeaderActionButton(QAbstractButton):
-    """Одна половина составной кнопки поиска/добавления в оконной панели."""
+    """Текстовая кнопка с иконкой в оконной панели."""
 
     def __init__(
         self,
@@ -523,10 +532,10 @@ class HeaderActionButton(QAbstractButton):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        if kind not in {"search", "add"}:
+        if kind not in {"search", "add", "list"}:
             raise ValueError("Неизвестная иконка кнопки панели")
-        if outer_side not in {"left", "right"}:
-            raise ValueError("outer_side должен быть left или right")
+        if outer_side not in {"left", "right", "both"}:
+            raise ValueError("outer_side должен быть left, right или both")
         self.kind = kind
         self.primary = primary
         self.outer_side = outer_side
@@ -583,8 +592,8 @@ class HeaderActionButton(QAbstractButton):
         shape = _segment_path(
             rect,
             3.0,
-            round_left=self.outer_side == "left",
-            round_right=self.outer_side == "right",
+            round_left=self.outer_side in {"left", "both"},
+            round_right=self.outer_side in {"right", "both"},
         )
 
         if not self.isEnabled():
@@ -651,8 +660,8 @@ class HeaderActionButton(QAbstractButton):
                 _segment_path(
                     rect.adjusted(2, 2, -2, -2),
                     2.0,
-                    round_left=self.outer_side == "left",
-                    round_right=self.outer_side == "right",
+                    round_left=self.outer_side in {"left", "both"},
+                    round_right=self.outer_side in {"right", "both"},
                 )
             )
 

@@ -43,6 +43,7 @@ from ..resources import application_icon
 from .camera_board import BoardTitleBar, CameraBoard
 from .dialogs import (
     BoardSettingsDialog,
+    CameraListDialog,
     OnvifDiscoveryDialog,
     OnvifProgressDialog,
     SettingsDialog,
@@ -112,6 +113,7 @@ class MainWindow(QWidget):
         self._onvif_cancelled = False
         self._onvif_success_callback: Callable[[object], None] | None = None
         self._onvif_failure_callback: Callable[[], None] | None = None
+        self._camera_list_dialog: CameraListDialog | None = None
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(application_icon())
@@ -149,24 +151,25 @@ class MainWindow(QWidget):
         )
         self.surface_layout.addWidget(self.title_bar)
         self.board = CameraBoard(
-            config.cameras,
+            tuple(camera for camera in config.cameras if camera.on_board),
             self.surface,
             layout_mode=config.layout_mode,
         )
         self.surface_layout.addWidget(self.board, 1)
-        self.title_bar.set_camera_count(self.board.camera_count())
         self.title_bar.set_compact(self.width() < 1080)
 
         self.title_bar.add_camera_clicked.connect(self.add_camera)
         self.title_bar.find_cameras_clicked.connect(self.find_cameras)
+        self.title_bar.camera_list_clicked.connect(self.open_camera_list)
         self.title_bar.settings_clicked.connect(self.open_board_settings)
         self.title_bar.layout_mode_changed.connect(self._layout_mode_changed)
         self.title_bar.fullscreen_clicked.connect(self.toggle_fullscreen)
         self.title_bar.minimize_clicked.connect(self._minimize_window)
         self.title_bar.close_clicked.connect(self.close)
-        self.board.camera_count_changed.connect(self.title_bar.set_camera_count)
+        self.board.camera_count_changed.connect(self._sync_camera_summary)
         self.board.layout_changed.connect(self._schedule_save)
         self.board.settings_requested.connect(self.open_camera_settings)
+        self._sync_camera_summary()
 
         self.fullscreen_shortcut = QShortcut(QKeySequence("F11"), self)
         self.fullscreen_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -216,8 +219,22 @@ class MainWindow(QWidget):
         autostart: bool | None = None,
         layout_mode: str | None = None,
     ) -> AppConfig:
+        replacements = replacements or {}
+        board_cameras = self.board.camera_configs(replacements)
+        visible = [camera for camera in board_cameras if camera.on_board]
+        visible_ids = {camera.camera_id for camera in visible}
+        hidden: list[CameraConfig] = []
+        for stored in self.config.cameras:
+            if stored.camera_id in visible_ids:
+                continue
+            source = replacements.get(stored.camera_id, stored)
+            hidden.append(source)
+        cameras = tuple(
+            camera.updated(geometry=camera.geometry.updated(z=index))
+            for index, camera in enumerate((*visible, *hidden))
+        )
         return AppConfig(
-            cameras=self.board.camera_configs(replacements),
+            cameras=cameras,
             autostart=self.config.autostart if autostart is None else autostart,
             layout_mode=(
                 self.config.layout_mode if layout_mode is None else layout_mode
@@ -229,11 +246,16 @@ class MainWindow(QWidget):
             self.store.save(candidate)
         except ConfigError as exc:
             if show_error:
-                QMessageBox.warning(self, APP_NAME, str(exc))
+                QMessageBox.warning(
+                    self._camera_list_dialog or self,
+                    APP_NAME,
+                    str(exc),
+                )
             return False
         self.config = candidate
         self._config_dirty = False
         self._save_timer.stop()
+        self._sync_camera_summary()
         return True
 
     def _persist_current_config(self, *, show_error: bool = True) -> bool:
@@ -247,8 +269,35 @@ class MainWindow(QWidget):
             self._config_dirty = True
             self._save_timer.start()
 
+    def _camera_config(self, camera_id: str) -> CameraConfig | None:
+        return next(
+            (
+                camera
+                for camera in self.config.cameras
+                if camera.camera_id == camera_id
+            ),
+            None,
+        )
+
+    def _sync_camera_summary(self, count: int | None = None) -> None:
+        if count is None:
+            count = self.board.camera_count()
+        total = len(self.config.cameras)
+        self.title_bar.set_camera_count(count, total)
+        self.board.set_hidden_count(
+            sum(not camera.on_board for camera in self.config.cameras)
+        )
+
+    def _refresh_camera_list(self) -> None:
+        dialog = self._camera_list_dialog
+        if dialog is not None:
+            dialog.refresh(self.config.cameras)
+
     def add_camera(self) -> None:
         self.board.create_camera()
+        self.config = self._snapshot_config()
+        self._sync_camera_summary()
+        self._refresh_camera_list()
 
     def _layout_mode_changed(self, mode: str) -> None:
         previous = self.board.layout_mode()
@@ -273,7 +322,7 @@ class MainWindow(QWidget):
 
     def _camera_ips(self) -> set[str]:
         result: set[str] = set()
-        for camera in self.board.camera_configs():
+        for camera in self.config.cameras:
             if camera.host.strip():
                 result.add(self._canonical_ip(camera.host))
             if camera.onvif_endpoint:
@@ -291,7 +340,7 @@ class MainWindow(QWidget):
     ) -> tuple[DiscoveredCamera, ...]:
         used_numbers: set[int] = set()
         used_names = {
-            camera.camera_name.casefold() for camera in self.board.camera_configs()
+            camera.camera_name.casefold() for camera in self.config.cameras
         }
         for name in used_names:
             match = re.fullmatch(r"камера\s+(\d+)", name, re.IGNORECASE)
@@ -465,51 +514,122 @@ class MainWindow(QWidget):
         if added:
             self._persist_current_config()
 
-    def open_camera_settings(self, camera_id: str) -> None:
-        tile = self.board.tile_for(camera_id)
-        if tile is None:
-            return
-        dialog = SettingsDialog(tile.config, self)
-        if dialog.exec() != SettingsDialog.DialogCode.Accepted:
+    def open_camera_list(self) -> None:
+        if self._camera_list_dialog is not None:
+            self._camera_list_dialog.raise_()
+            self._camera_list_dialog.activateWindow()
             return
 
-        if dialog.delete_requested:
-            remaining: list[CameraConfig] = []
-            for camera in self.board.camera_configs():
-                if camera.camera_id == camera_id:
-                    continue
-                remaining.append(
-                    camera.updated(
-                        geometry=camera.geometry.updated(z=len(remaining))
-                    )
-                )
-            candidate = AppConfig(
-                cameras=tuple(remaining),
-                autostart=self.config.autostart,
-                layout_mode=self.config.layout_mode,
+        dialog = CameraListDialog(self.config.cameras, self)
+        self._camera_list_dialog = dialog
+        dialog.toggle_requested.connect(self._set_camera_on_board)
+        dialog.settings_requested.connect(self.open_camera_settings)
+        try:
+            dialog.exec()
+        finally:
+            if self._camera_list_dialog is dialog:
+                self._camera_list_dialog = None
+            dialog.deleteLater()
+
+    def _set_camera_on_board(self, camera_id: str, on_board: bool) -> bool:
+        current = self._camera_config(camera_id)
+        if current is None or not isinstance(on_board, bool):
+            self._refresh_camera_list()
+            return False
+        if current.on_board == on_board:
+            return True
+
+        if on_board:
+            replacement = current.updated(on_board=True)
+        else:
+            board_camera = next(
+                (
+                    camera
+                    for camera in self.board.camera_configs()
+                    if camera.camera_id == camera_id
+                ),
+                None,
             )
-            if self._persist_candidate(candidate):
-                self.board.remove_camera(camera_id)
-            return
+            if board_camera is None:
+                dialog = self._camera_list_dialog
+                if dialog is not None:
+                    dialog.set_camera_on_board(camera_id, current.on_board)
+                return False
+            replacement = board_camera.updated(on_board=False)
 
-        candidate_camera = dialog.result_config
-        if candidate_camera is None:
-            return
-        needs_onvif_refresh = (
-            candidate_camera.source == "onvif"
-            and not candidate_camera.is_configured()
-        )
         candidate = self._snapshot_config(
-            replacements={camera_id: candidate_camera}
+            replacements={camera_id: replacement}
         )
         if not self._persist_candidate(candidate):
-            return
-        applied_camera = next(
-            camera for camera in candidate.cameras if camera.camera_id == camera_id
+            dialog = self._camera_list_dialog
+            if dialog is not None:
+                dialog.set_camera_on_board(camera_id, current.on_board)
+            return False
+
+        applied = next(
+            camera
+            for camera in candidate.cameras
+            if camera.camera_id == camera_id
         )
-        self.board.replace_camera_config(applied_camera)
-        if needs_onvif_refresh:
-            self._refresh_onvif_camera(applied_camera)
+        if on_board:
+            self.board.add_camera(applied)
+        else:
+            self.board.remove_camera(camera_id)
+        self._sync_camera_summary()
+        self._refresh_camera_list()
+        return True
+
+    def open_camera_settings(self, camera_id: str) -> None:
+        current = self._camera_config(camera_id)
+        if current is None:
+            self._refresh_camera_list()
+            return
+        dialog = SettingsDialog(current, self._camera_list_dialog or self)
+        try:
+            if dialog.exec() != SettingsDialog.DialogCode.Accepted:
+                return
+
+            if dialog.delete_requested:
+                snapshot = self._snapshot_config()
+                remaining = tuple(
+                    camera.updated(
+                        geometry=camera.geometry.updated(z=index)
+                    )
+                    for index, camera in enumerate(
+                        camera
+                        for camera in snapshot.cameras
+                        if camera.camera_id != camera_id
+                    )
+                )
+                candidate = snapshot.updated(cameras=remaining)
+                if self._persist_candidate(candidate):
+                    self.board.remove_camera(camera_id)
+                    self._sync_camera_summary()
+                return
+
+            candidate_camera = dialog.result_config
+            if candidate_camera is None:
+                return
+            needs_onvif_refresh = (
+                candidate_camera.source == "onvif"
+                and not candidate_camera.is_configured()
+            )
+            candidate = self._snapshot_config(
+                replacements={camera_id: candidate_camera}
+            )
+            if not self._persist_candidate(candidate):
+                return
+            applied_camera = next(
+                camera
+                for camera in candidate.cameras
+                if camera.camera_id == camera_id
+            )
+            if self.board.tile_for(camera_id) is not None:
+                self.board.replace_camera_config(applied_camera)
+            if needs_onvif_refresh:
+                self._refresh_onvif_camera(applied_camera)
+        finally:
+            self._refresh_camera_list()
 
     def _refresh_onvif_camera(self, camera: CameraConfig) -> None:
         progress = OnvifProgressDialog(
@@ -539,10 +659,9 @@ class MainWindow(QWidget):
         if not isinstance(payload, DiscoveredCamera) or not payload.ready:
             self._show_onvif_credentials_error()
             return
-        tile = self.board.tile_for(requested.camera_id)
-        if tile is None:
+        current = self._camera_config(requested.camera_id)
+        if current is None:
             return
-        current = tile.config
         if (
             current.onvif_endpoint != requested.onvif_endpoint
             or current.onvif_username != requested.onvif_username
@@ -562,7 +681,9 @@ class MainWindow(QWidget):
         applied_camera = next(
             item for item in candidate.cameras if item.camera_id == current.camera_id
         )
-        self.board.replace_camera_config(applied_camera)
+        if self.board.tile_for(current.camera_id) is not None:
+            self.board.replace_camera_config(applied_camera)
+        self._refresh_camera_list()
 
     def _show_onvif_credentials_error(self) -> None:
         QMessageBox.warning(
