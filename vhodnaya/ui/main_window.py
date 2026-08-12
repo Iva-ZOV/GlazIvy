@@ -100,7 +100,11 @@ class MainWindow(QWidget):
     RESIZE_MARGIN = 11
     WINDOW_MARGIN = 18
     FULLSCREEN_PANEL_HEIGHT = 62
-    FULLSCREEN_PANEL_IDLE_TIMEOUT_MS = 2800
+    # Панель всплывает только от самой кромки экрана: полоса во всю высоту
+    # панели накрывала бы шапки верхних плиток и развёрнутой камеры.
+    FULLSCREEN_PANEL_TRIGGER_HEIGHT = 4
+    FULLSCREEN_PANEL_HIDE_DELAY_MS = 400
+    FULLSCREEN_PANEL_HINT_TIMEOUT_MS = 2800
     FULLSCREEN_POINTER_POLL_MS = 150
 
     def __init__(
@@ -187,7 +191,7 @@ class MainWindow(QWidget):
         self._title_bar_idle_timer = QTimer(self)
         self._title_bar_idle_timer.setSingleShot(True)
         self._title_bar_idle_timer.setInterval(
-            self.FULLSCREEN_PANEL_IDLE_TIMEOUT_MS
+            self.FULLSCREEN_PANEL_HIDE_DELAY_MS
         )
         self._title_bar_idle_timer.timeout.connect(
             self._title_bar_idle_timeout
@@ -985,25 +989,32 @@ class MainWindow(QWidget):
         if not self._title_bar_overlay:
             return
         self._set_fullscreen_title_bar_visible(True)
-        self._title_bar_idle_timer.start()
+        self._title_bar_idle_timer.start(self.FULLSCREEN_PANEL_HIDE_DELAY_MS)
+
+    def _pointer_in_fullscreen_trigger_zone(self) -> bool:
+        position = self.surface.mapFromGlobal(QCursor.pos())
+        return (
+            0 <= position.x() < self.surface.width()
+            and 0 <= position.y() < self.FULLSCREEN_PANEL_TRIGGER_HEIGHT
+        )
 
     def _title_bar_idle_timeout(self) -> None:
         if not self._title_bar_overlay:
             return
-        if self._pointer_over_fullscreen_title_bar():
-            self._title_bar_idle_timer.start()
+        if (
+            self._pointer_over_fullscreen_title_bar()
+            or self._pointer_in_fullscreen_trigger_zone()
+        ):
+            self._title_bar_idle_timer.start(self.FULLSCREEN_PANEL_HIDE_DELAY_MS)
             return
         self._set_fullscreen_title_bar_visible(False)
 
     def _poll_fullscreen_pointer(self) -> None:
         if not self._title_bar_overlay:
             return
-        position = self.surface.mapFromGlobal(QCursor.pos())
-        in_top_zone = (
-            0 <= position.x() < self.surface.width()
-            and 0 <= position.y() <= self.FULLSCREEN_PANEL_HEIGHT
-        )
-        if in_top_zone or (
+        # Панель держится, только пока курсор у кромки экрана или на самой
+        # панели: иначе она перекрывает шапки плиток под собой.
+        if self._pointer_in_fullscreen_trigger_zone() or (
             self._title_bar_target_visible
             and self._pointer_over_fullscreen_title_bar()
         ):
@@ -1018,8 +1029,10 @@ class MainWindow(QWidget):
         self._title_bar_overlay = True
         self.title_bar.set_overlay_backing(True)
         self._position_fullscreen_title_bar()
+        # При входе панель показывается подольше — это подсказка, что она есть
+        # и куда вести курсор, чтобы вернуть её.
         self._set_fullscreen_title_bar_visible(True, animate=False)
-        self._title_bar_idle_timer.start()
+        self._title_bar_idle_timer.start(self.FULLSCREEN_PANEL_HINT_TIMEOUT_MS)
         self._fullscreen_pointer_timer.start()
 
     def _leave_fullscreen_title_bar_overlay(self) -> None:
