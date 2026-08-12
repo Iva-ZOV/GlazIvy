@@ -58,7 +58,7 @@ function Update-File([string]$path, [string]$pattern, [string]$replacement) {
     $original = Get-Content -LiteralPath $path -Raw -Encoding UTF8
     # Шаблон обязан находиться: иначе версия молча осталась бы старой.
     if (-not [regex]::IsMatch($original, $pattern)) {
-        throw "Шаблон версии не найден в $path: $pattern"
+        throw "Шаблон версии не найден в ${path}: $pattern"
     }
     $updated = [regex]::Replace($original, $pattern, $replacement)
     if ($updated -eq $original) {
