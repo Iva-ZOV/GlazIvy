@@ -53,6 +53,7 @@ from .dialogs import (
     OnvifProgressDialog,
     SettingsDialog,
 )
+from .night_mode import NightModeController
 from .widgets import GrainFrame
 
 
@@ -170,6 +171,11 @@ class MainWindow(QWidget):
         )
         self.surface_layout.addWidget(self.board, 1)
         self.title_bar.set_compact(self.width() < 1080)
+        self.night_mode_controller = NightModeController(config, self)
+        self._night_overlay = self.night_mode_controller.register_window(
+            self,
+            self.surface,
+        )
         self.audio_controller = AudioController(self)
 
         self._title_bar_overlay = False
@@ -280,6 +286,9 @@ class MainWindow(QWidget):
         replacements: dict[str, CameraConfig] | None = None,
         autostart: bool | None = None,
         layout_mode: str | None = None,
+        night_mode: bool | None = None,
+        night_start: str | None = None,
+        night_end: str | None = None,
     ) -> AppConfig:
         replacements = replacements or {}
         board_cameras = self.board.camera_configs(replacements)
@@ -301,12 +310,19 @@ class MainWindow(QWidget):
             for camera in board_cameras
             if camera.camera_id not in stored_ids
         )
-        return AppConfig(
+        return self.config.updated(
             cameras=tuple(cameras),
             autostart=self.config.autostart if autostart is None else autostart,
             layout_mode=(
                 self.config.layout_mode if layout_mode is None else layout_mode
             ),
+            night_mode=(
+                self.config.night_mode if night_mode is None else night_mode
+            ),
+            night_start=(
+                self.config.night_start if night_start is None else night_start
+            ),
+            night_end=self.config.night_end if night_end is None else night_end,
         )
 
     def _persist_candidate(self, candidate: AppConfig, *, show_error: bool = True) -> bool:
@@ -320,7 +336,14 @@ class MainWindow(QWidget):
                     str(exc),
                 )
             return False
+        previous_config = self.config
         self.config = candidate
+        if (
+            candidate.night_mode != previous_config.night_mode
+            or candidate.night_start != previous_config.night_start
+            or candidate.night_end != previous_config.night_end
+        ):
+            self.night_mode_controller.apply_config(candidate)
         self._config_dirty = False
         self._save_timer.stop()
         controller = getattr(self, "audio_controller", None)
@@ -491,6 +514,7 @@ class MainWindow(QWidget):
         self.config = self._snapshot_config()
         self._sync_camera_summary()
         self._refresh_camera_list()
+        self._raise_night_overlay()
 
     def _layout_mode_changed(self, mode: str) -> None:
         previous = self.board.layout_mode()
@@ -773,6 +797,7 @@ class MainWindow(QWidget):
             self.board.add_camera(applied, index=visible_index)
         else:
             self.board.remove_camera(camera_id)
+        self._raise_night_overlay()
         self._sync_camera_summary()
         self._refresh_camera_list()
         return True
@@ -887,17 +912,49 @@ class MainWindow(QWidget):
         )
 
     def open_board_settings(self) -> None:
-        dialog = BoardSettingsDialog(self.config.autostart, self)
+        dialog = BoardSettingsDialog(
+            self.config.autostart,
+            self,
+            night_mode=self.config.night_mode,
+            night_start=self.config.night_start,
+            night_end=self.config.night_end,
+        )
         if dialog.exec() != BoardSettingsDialog.DialogCode.Accepted:
             return
         enabled = dialog.result_autostart
-        if enabled is None or enabled == self.config.autostart:
+        night_mode = dialog.result_night_mode
+        night_start = dialog.result_night_start
+        night_end = dialog.result_night_end
+        if (
+            enabled is None
+            or night_mode is None
+            or night_start is None
+            or night_end is None
+        ):
+            return
+
+        settings_changed = (
+            enabled != self.config.autostart
+            or night_mode != self.config.night_mode
+            or night_start != self.config.night_start
+            or night_end != self.config.night_end
+        )
+        if not settings_changed:
+            return
+
+        candidate = self._snapshot_config(
+            autostart=enabled,
+            night_mode=night_mode,
+            night_start=night_start,
+            night_end=night_end,
+        )
+        if enabled == self.config.autostart:
+            self._persist_candidate(candidate)
             return
 
         previous = self.config.autostart
         try:
             set_autostart(enabled)
-            candidate = self._snapshot_config(autostart=enabled)
             if not self._persist_candidate(candidate):
                 set_autostart(previous)
         except AutostartError as exc:
@@ -927,6 +984,12 @@ class MainWindow(QWidget):
             self.FULLSCREEN_PANEL_HEIGHT,
         )
         self.title_bar.raise_()
+        self._raise_night_overlay()
+
+    def _raise_night_overlay(self) -> None:
+        controller = getattr(self, "night_mode_controller", None)
+        if controller is not None:
+            controller.raise_overlay(self)
 
     def _pointer_over_fullscreen_title_bar(self) -> bool:
         if not self.title_bar.isVisible():
@@ -950,6 +1013,7 @@ class MainWindow(QWidget):
                 self.title_bar.setEnabled(True)
                 self.title_bar.show()
                 self.title_bar.raise_()
+                self._raise_night_overlay()
             return
 
         self._title_bar_target_visible = visible
@@ -959,8 +1023,10 @@ class MainWindow(QWidget):
             self.title_bar.setEnabled(True)
             self.title_bar.show()
             self.title_bar.raise_()
+            self._raise_night_overlay()
         elif self.title_bar.isVisible():
             self.title_bar.raise_()
+            self._raise_night_overlay()
 
         if (
             not animate
@@ -980,6 +1046,7 @@ class MainWindow(QWidget):
             self.title_bar.setEnabled(True)
             self.title_bar.show()
             self.title_bar.raise_()
+            self._raise_night_overlay()
             return
         self._title_bar_effect.setOpacity(0.0)
         self.title_bar.setEnabled(False)
@@ -1084,6 +1151,7 @@ class MainWindow(QWidget):
         else:
             self._leave_fullscreen_title_bar_overlay()
             self.board.set_fullscreen_reference_size(None)
+        self._raise_night_overlay()
         self.update()
 
     def changeEvent(self, event: QEvent) -> None:
@@ -1123,6 +1191,7 @@ class MainWindow(QWidget):
             self.title_bar.set_compact(self.width() < 1080)
         if getattr(self, "_title_bar_overlay", False):
             self._position_fullscreen_title_bar()
+        self._raise_night_overlay()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if (
@@ -1131,6 +1200,12 @@ class MainWindow(QWidget):
             and getattr(self, "_title_bar_overlay", False)
         ):
             QTimer.singleShot(0, self._position_fullscreen_title_bar)
+        if watched is getattr(self, "surface", None) and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.ChildAdded,
+        ):
+            QTimer.singleShot(0, self._raise_night_overlay)
         return super().eventFilter(watched, event)
 
     def _resize_edges(self, position: QPoint) -> Qt.Edge:
@@ -1188,6 +1263,7 @@ class MainWindow(QWidget):
         self._fullscreen_pointer_timer.stop()
         self._title_bar_idle_timer.stop()
         self._title_bar_animation.stop()
+        self.night_mode_controller.shutdown()
         needs_save = self._config_dirty or self._save_timer.isActive()
         self._save_timer.stop()
         if needs_save:

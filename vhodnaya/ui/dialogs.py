@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -23,14 +23,16 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from ..config import CameraConfig
+from ..config import CameraConfig, DEFAULT_NIGHT_END, DEFAULT_NIGHT_START
 from ..onvif import DiscoveredCamera
 from ..resources import application_icon
 from .forms import CameraForm
+from .night_mode import NightModeController, controller_from_parent
 from .theme import BRONZE, SUCCESS, TEXT_MUTED, WARNING
 from .widgets import (
     GrainFrame,
@@ -116,8 +118,24 @@ class FramelessDialog(QDialog):
         self.header.close_clicked.connect(self.reject)
         self.surface_layout.addWidget(self.header)
 
+        self.night_mode_controller: NightModeController | None = (
+            controller_from_parent(parent)
+        )
+        # Временно поднятые parent-диалоги не должны оказаться поверх уже
+        # действующего затемнения главного окна.
+        if self.night_mode_controller is not None:
+            self.night_mode_controller.raise_all_overlays()
+        self._night_overlay = (
+            self.night_mode_controller.register_window(self, self.surface)
+            if self.night_mode_controller is not None
+            else None
+        )
+
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        if self.night_mode_controller is not None:
+            controller = self.night_mode_controller
+            QTimer.singleShot(0, lambda: controller.raise_overlay(self))
         if self.parentWidget() is not None and self.parentWidget().windowHandle() is not None:
             screen = self.parentWidget().windowHandle().screen()
         else:
@@ -132,6 +150,12 @@ class FramelessDialog(QDialog):
             available.center().x() - self.width() // 2,
             available.center().y() - self.height() // 2,
         )
+
+    def done(self, result: int) -> None:
+        super().done(result)
+        if self.night_mode_controller is not None:
+            self.night_mode_controller.unregister_window(self)
+            self._night_overlay = None
 
 
 def _dialog_mascot(
@@ -789,14 +813,25 @@ class SettingsDialog(FramelessDialog):
 class BoardSettingsDialog(FramelessDialog):
     """Небольшой экран общих настроек приложения."""
 
-    def __init__(self, autostart: bool, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        autostart: bool,
+        parent: QWidget | None = None,
+        *,
+        night_mode: bool = False,
+        night_start: str = DEFAULT_NIGHT_START,
+        night_end: str = DEFAULT_NIGHT_END,
+    ) -> None:
         super().__init__(
             "Настройки доски",
             parent,
             preferred_width=620,
-            preferred_height=450,
+            preferred_height=500,
         )
         self.result_autostart: bool | None = None
+        self.result_night_mode: bool | None = None
+        self.result_night_start: str | None = None
+        self.result_night_end: str | None = None
 
         content = QWidget(self.surface)
         layout = QVBoxLayout(content)
@@ -819,6 +854,48 @@ class BoardSettingsDialog(FramelessDialog):
         self.autostart_check.setChecked(autostart)
         layout.addSpacing(12)
         layout.addWidget(self.autostart_check)
+
+        night_row = QFrame(content)
+        night_row.setObjectName("settingsRow")
+        night_layout = QHBoxLayout(night_row)
+        night_layout.setContentsMargins(14, 9, 12, 9)
+        night_layout.setSpacing(9)
+        self.night_mode_check = QCheckBox("Ночник", night_row)
+        self.night_mode_check.setChecked(night_mode)
+        self.night_mode_check.setToolTip(
+            "В выбранные часы всё приложение плавно затемняется до 20% яркости."
+        )
+        night_layout.addWidget(self.night_mode_check)
+        night_layout.addStretch(1)
+
+        start_label = QLabel("с", night_row)
+        start_label.setObjectName("fieldLabel")
+        night_layout.addWidget(start_label)
+        self.night_start_edit = QTimeEdit(night_row)
+        self.night_start_edit.setDisplayFormat("HH:mm")
+        start_time = QTime.fromString(night_start, "HH:mm")
+        self.night_start_edit.setTime(
+            start_time if start_time.isValid() else QTime(22, 0)
+        )
+        self.night_start_edit.setFixedWidth(88)
+        self.night_start_edit.setAccessibleName("Начало ночного режима")
+        night_layout.addWidget(self.night_start_edit)
+
+        end_label = QLabel("до", night_row)
+        end_label.setObjectName("fieldLabel")
+        night_layout.addWidget(end_label)
+        self.night_end_edit = QTimeEdit(night_row)
+        self.night_end_edit.setDisplayFormat("HH:mm")
+        end_time = QTime.fromString(night_end, "HH:mm")
+        self.night_end_edit.setTime(
+            end_time if end_time.isValid() else QTime(6, 0)
+        )
+        self.night_end_edit.setFixedWidth(88)
+        self.night_end_edit.setAccessibleName("Окончание ночного режима")
+        night_layout.addWidget(self.night_end_edit)
+        layout.addWidget(night_row)
+        self.night_mode_check.toggled.connect(self._sync_night_fields)
+        self._sync_night_fields(night_mode)
         layout.addStretch(1)
 
         buttons = QHBoxLayout()
@@ -837,6 +914,13 @@ class BoardSettingsDialog(FramelessDialog):
         layout.addLayout(buttons)
         self.surface_layout.addWidget(content, 1)
 
+    def _sync_night_fields(self, enabled: bool) -> None:
+        self.night_start_edit.setEnabled(enabled)
+        self.night_end_edit.setEnabled(enabled)
+
     def _accept_settings(self) -> None:
         self.result_autostart = self.autostart_check.isChecked()
+        self.result_night_mode = self.night_mode_check.isChecked()
+        self.result_night_start = self.night_start_edit.time().toString("HH:mm")
+        self.result_night_end = self.night_end_edit.time().toString("HH:mm")
         self.accept()

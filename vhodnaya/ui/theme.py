@@ -166,7 +166,8 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     }}
 
     QLineEdit,
-    QSpinBox {{
+    QSpinBox,
+    QTimeEdit {{
         min-height: 40px;
         padding: 0 12px;
         color: {TEXT};
@@ -178,30 +179,36 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
     }}
 
     QLineEdit:hover,
-    QSpinBox:hover {{
+    QSpinBox:hover,
+    QTimeEdit:hover {{
         border-color: rgba(184, 155, 106, 92);
     }}
 
     QLineEdit:focus,
-    QSpinBox:focus {{
+    QSpinBox:focus,
+    QTimeEdit:focus {{
         background-color: #2E3027;
         border: 1px solid rgba(110, 122, 69, 220);
     }}
 
     QLineEdit[invalid="true"],
-    QSpinBox[invalid="true"] {{
+    QSpinBox[invalid="true"],
+    QTimeEdit[invalid="true"] {{
         border: 1px solid rgba(192, 50, 43, 225);
     }}
 
     QLineEdit:disabled,
-    QSpinBox:disabled {{
+    QSpinBox:disabled,
+    QTimeEdit:disabled {{
         color: rgba(184, 155, 106, 115);
         background-color: rgba(42, 44, 36, 130);
         border-color: rgba(184, 155, 106, 24);
     }}
 
     QSpinBox::up-button,
-    QSpinBox::down-button {{
+    QSpinBox::down-button,
+    QTimeEdit::up-button,
+    QTimeEdit::down-button {{
         width: 18px;
         border: none;
         background: transparent;
@@ -211,6 +218,12 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         color: #CFBB8C;
         font-size: 12px;
         font-weight: 600;
+    }}
+
+    QFrame#settingsRow {{
+        background-color: rgba(42, 44, 36, 128);
+        border: 1px solid rgba(184, 155, 106, 38);
+        border-radius: 4px;
     }}
 
     QLabel#discoveryAddress {{

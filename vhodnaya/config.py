@@ -28,6 +28,9 @@ from .constants import (
 
 CONFIG_VERSION = 2
 LAYOUT_MODES = {"free", "grid"}
+DEFAULT_NIGHT_START = "22:00"
+DEFAULT_NIGHT_END = "06:00"
+_TIME_HHMM_RE = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 
 
 class ConfigError(ValueError):
@@ -432,6 +435,9 @@ class AppConfig:
     cameras: tuple[CameraConfig, ...] = field(default_factory=tuple)
     autostart: bool = False
     layout_mode: str = "free"
+    night_mode: bool = False
+    night_start: str = DEFAULT_NIGHT_START
+    night_end: str = DEFAULT_NIGHT_END
 
     def updated(self, **changes: Any) -> "AppConfig":
         return replace(self, **changes)
@@ -441,6 +447,16 @@ class AppConfig:
             raise ConfigError("Параметр автозапуска должен быть логическим.")
         if self.layout_mode not in LAYOUT_MODES:
             raise ConfigError("Режим раскладки должен быть свободным или сеточным.")
+        if not isinstance(self.night_mode, bool):
+            raise ConfigError("Параметр ночника должен быть логическим.")
+        for field_name, value in (
+            ("night_start", self.night_start),
+            ("night_end", self.night_end),
+        ):
+            if not isinstance(value, str):
+                raise ConfigError(f"Поле {field_name} должно быть строкой HH:MM.")
+            if _TIME_HHMM_RE.fullmatch(value) is None:
+                raise ConfigError(f"Поле {field_name} должно иметь формат HH:MM.")
         seen_ids: set[str] = set()
         for camera in self.cameras:
             if not isinstance(camera, CameraConfig):
@@ -494,6 +510,15 @@ def _read_int(payload: dict[str, Any], key: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"Поле {key} должно быть целым числом.") from exc
+
+
+def _read_night_time(payload: dict[str, Any], key: str, default: str) -> str:
+    """Мягко чинит мусорную строку, но не скрывает неверный тип поля."""
+
+    value = payload.get(key, default)
+    if not isinstance(value, str):
+        raise ConfigError(f"Поле {key} должно быть строкой HH:MM.")
+    return value if _TIME_HHMM_RE.fullmatch(value) is not None else default
 
 
 class ConfigStore:
@@ -627,6 +652,17 @@ class ConfigStore:
             cameras=tuple(normalized_cameras),
             autostart=_read_bool(payload, "autostart", False),
             layout_mode=str(payload.get("layout_mode", "free")).lower(),
+            night_mode=_read_bool(payload, "night_mode", False),
+            night_start=_read_night_time(
+                payload,
+                "night_start",
+                DEFAULT_NIGHT_START,
+            ),
+            night_end=_read_night_time(
+                payload,
+                "night_end",
+                DEFAULT_NIGHT_END,
+            ),
         )
         config.validate()
         return config
@@ -670,6 +706,9 @@ class ConfigStore:
             "config_version": CONFIG_VERSION,
             "autostart": config.autostart,
             "layout_mode": config.layout_mode,
+            "night_mode": config.night_mode,
+            "night_start": config.night_start,
+            "night_end": config.night_end,
             "cameras": [self._camera_payload(camera) for camera in config.cameras],
         }
 
