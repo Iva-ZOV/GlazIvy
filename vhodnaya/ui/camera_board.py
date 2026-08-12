@@ -364,6 +364,9 @@ class CameraBoard(QWidget):
     camera_count_changed = Signal(int)
     settings_requested = Signal(str)
     hide_requested = Signal(str)
+    audio_toggle_requested = Signal(str)
+    audio_volume_changed = Signal(str, int)
+    audio_reconnect_requested = Signal(str)
 
     GRID_SPACING = 10
 
@@ -384,6 +387,8 @@ class CameraBoard(QWidget):
         self._layout_mode = layout_mode
         self._expanded_camera_id: str | None = None
         self._hidden_count = 0
+        self._audio_backend_available = True
+        self._audio_runtime_states: dict[str, str] = {}
         self._last_raise_snapshot: tuple[str, tuple[str, ...], float] | None = None
         self._corner_radius = 6.0
         self._fullscreen_reference_size: QSize | None = None
@@ -479,6 +484,18 @@ class CameraBoard(QWidget):
         tile.hide_requested.connect(
             lambda camera_id: self.hide_requested.emit(camera_id)
         )
+        tile.audio_toggle_requested.connect(
+            lambda camera_id: self.audio_toggle_requested.emit(camera_id)
+        )
+        tile.audio_volume_changed.connect(
+            lambda camera_id, volume: self.audio_volume_changed.emit(
+                camera_id,
+                volume,
+            )
+        )
+        tile.audio_reconnect_requested.connect(
+            lambda camera_id: self.audio_reconnect_requested.emit(camera_id)
+        )
         tile.expand_requested.connect(self.toggle_camera_expanded)
 
     def add_camera(
@@ -506,6 +523,10 @@ class CameraBoard(QWidget):
         z_index = max(0, min(config.geometry.z, len(self._z_order)))
         self._z_order.insert(z_index, config.camera_id)
         self._free_geometries[config.camera_id] = config.geometry
+        tile.set_audio_backend_available(self._audio_backend_available)
+        tile.set_audio_runtime_state(
+            self._audio_runtime_states.get(config.camera_id, "idle")
+        )
         tile.show()
         if self.isVisible():
             self._apply_current_layout()
@@ -644,8 +665,18 @@ class CameraBoard(QWidget):
         tile = self._tiles.get(config.camera_id)
         if tile is None:
             return False
+        connection_changed = (
+            CameraTile._connection_signature(tile.config)
+            != CameraTile._connection_signature(config)
+        )
+        if connection_changed:
+            self._audio_runtime_states.pop(config.camera_id, None)
         self._free_geometries[config.camera_id] = config.geometry
         tile.apply_config(config)
+        tile.set_audio_backend_available(self._audio_backend_available)
+        tile.set_audio_runtime_state(
+            self._audio_runtime_states.get(config.camera_id, "idle")
+        )
         if self._layout_mode == "free" and self._expanded_camera_id is None:
             if self._fullscreen_reference_size is not None:
                 tile.setGeometry(self._scaled_free_geometry(config.geometry))
@@ -659,6 +690,20 @@ class CameraBoard(QWidget):
                 if tile.constrain_to_parent():
                     self._remember_free_geometry(config.camera_id)
         return True
+
+    def set_audio_backend_available(self, available: bool) -> None:
+        self._audio_backend_available = bool(available)
+        for tile in self._tiles.values():
+            tile.set_audio_backend_available(self._audio_backend_available)
+
+    def set_audio_runtime_state(self, camera_id: str, state: str) -> None:
+        if state in {"idle", "off"}:
+            self._audio_runtime_states.pop(camera_id, None)
+        else:
+            self._audio_runtime_states[camera_id] = state
+        tile = self._tiles.get(camera_id)
+        if tile is not None:
+            tile.set_audio_runtime_state(state)
 
     def set_layout_mode(self, mode: str) -> bool:
         if mode not in {"free", "grid"}:

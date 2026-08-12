@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..autostart import AutostartError, set_autostart
+from ..audio import AudioController
 from ..config import AppConfig, CameraConfig, ConfigError, ConfigStore
 from ..constants import APP_NAME
 from ..onvif import DiscoveredCamera, discover_cameras, resolve_onvif_camera
@@ -165,6 +166,7 @@ class MainWindow(QWidget):
         )
         self.surface_layout.addWidget(self.board, 1)
         self.title_bar.set_compact(self.width() < 1080)
+        self.audio_controller = AudioController(self)
 
         self._title_bar_overlay = False
         self._title_bar_target_visible = True
@@ -211,6 +213,18 @@ class MainWindow(QWidget):
         self.board.hide_requested.connect(
             lambda camera_id: self._set_camera_on_board(camera_id, False)
         )
+        self.board.audio_toggle_requested.connect(self._toggle_camera_audio)
+        self.board.audio_volume_changed.connect(self._set_camera_volume)
+        self.board.audio_reconnect_requested.connect(
+            self.audio_controller.restart_camera
+        )
+        self.audio_controller.track_missing.connect(self._audio_track_missing)
+        self.audio_controller.state_changed.connect(
+            self.board.set_audio_runtime_state
+        )
+        self.audio_controller.backend_available_changed.connect(
+            self.board.set_audio_backend_available
+        )
         self._sync_camera_summary()
 
         self.fullscreen_shortcut = QShortcut(QKeySequence("F11"), self)
@@ -224,6 +238,8 @@ class MainWindow(QWidget):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(350)
         self._save_timer.timeout.connect(self._persist_current_config)
+
+        self.audio_controller.sync_config(self.config)
 
         for widget in (self, *self.findChildren(QWidget)):
             widget.setMouseTracking(True)
@@ -303,6 +319,9 @@ class MainWindow(QWidget):
         self.config = candidate
         self._config_dirty = False
         self._save_timer.stop()
+        controller = getattr(self, "audio_controller", None)
+        if controller is not None:
+            controller.sync_config(candidate)
         self._sync_camera_summary()
         return True
 
@@ -326,6 +345,100 @@ class MainWindow(QWidget):
             ),
             None,
         )
+
+    def _toggle_camera_audio(self, camera_id: str) -> bool:
+        snapshot = self._snapshot_config()
+        current = next(
+            (
+                camera
+                for camera in snapshot.cameras
+                if camera.camera_id == camera_id
+            ),
+            None,
+        )
+        if current is None:
+            return False
+        enable = not current.audio_on
+        if enable and (not current.on_board or not current.is_configured()):
+            return False
+
+        if enable:
+            cameras = tuple(
+                camera.updated(audio_on=camera.camera_id == camera_id)
+                for camera in snapshot.cameras
+            )
+        else:
+            cameras = tuple(
+                camera.updated(audio_on=False)
+                if camera.camera_id == camera_id
+                else camera
+                for camera in snapshot.cameras
+            )
+        candidate = snapshot.updated(cameras=cameras)
+        if not self._persist_candidate(candidate):
+            return False
+        for camera in candidate.cameras:
+            previous = next(
+                item
+                for item in snapshot.cameras
+                if item.camera_id == camera.camera_id
+            )
+            if (
+                camera != previous
+                and self.board.tile_for(camera.camera_id) is not None
+            ):
+                self.board.replace_camera_config(camera)
+        return True
+
+    def _set_camera_volume(self, camera_id: str, volume: int) -> None:
+        value = max(0, min(100, int(volume)))
+        snapshot = self._snapshot_config()
+        current = next(
+            (
+                camera
+                for camera in snapshot.cameras
+                if camera.camera_id == camera_id
+            ),
+            None,
+        )
+        if current is None or current.volume == value:
+            return
+        replacement = current.updated(volume=value)
+        candidate = snapshot.updated(
+            cameras=tuple(
+                replacement if camera.camera_id == camera_id else camera
+                for camera in snapshot.cameras
+            )
+        )
+        candidate.validate()
+        self.config = candidate
+        if self.board.tile_for(camera_id) is not None:
+            self.board.replace_camera_config(replacement)
+        self.audio_controller.sync_config(candidate)
+        self._schedule_save()
+
+    def _audio_track_missing(self, camera_id: str) -> None:
+        snapshot = self._snapshot_config()
+        current = next(
+            (
+                camera
+                for camera in snapshot.cameras
+                if camera.camera_id == camera_id
+            ),
+            None,
+        )
+        if current is not None and current.audio_on:
+            replacement = current.updated(audio_on=False)
+            candidate = snapshot.updated(
+                cameras=tuple(
+                    replacement if camera.camera_id == camera_id else camera
+                    for camera in snapshot.cameras
+                )
+            )
+            if self._persist_candidate(candidate):
+                if self.board.tile_for(camera_id) is not None:
+                    self.board.replace_camera_config(replacement)
+        self.board.set_audio_runtime_state(camera_id, "no_track")
 
     def _sync_camera_summary(self, count: int | None = None) -> None:
         if count is None:
@@ -1069,6 +1182,7 @@ class MainWindow(QWidget):
         if self._onvif_task is not None:
             self._onvif_task.cancel()
         self._shutting_down = True
+        self.audio_controller.shutdown()
         self.board.shutdown()
 
     def closeEvent(self, event: QCloseEvent) -> None:

@@ -54,6 +54,57 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         border-radius: 4px;
     }}
 
+    QWidget#audioVolumePopup {{
+        background-color: {SURFACE};
+        border: 1px solid rgba(184, 155, 106, 150);
+        border-radius: 4px;
+    }}
+
+    QLabel#audioVolumeValue {{
+        min-height: 17px;
+        color: {TEXT};
+        font-size: 11px;
+        font-weight: 650;
+        background: transparent;
+        border: none;
+    }}
+
+    QSlider#audioVolumeSlider {{
+        min-width: 20px;
+        background: transparent;
+    }}
+
+    QSlider#audioVolumeSlider::groove:vertical {{
+        width: 4px;
+        background-color: #303228;
+        border: 1px solid rgba(184, 155, 106, 42);
+        border-radius: 2px;
+    }}
+
+    QSlider#audioVolumeSlider::sub-page:vertical {{
+        background-color: #303228;
+        border-radius: 2px;
+    }}
+
+    QSlider#audioVolumeSlider::add-page:vertical {{
+        background-color: {KHAKI};
+        border-radius: 2px;
+    }}
+
+    QSlider#audioVolumeSlider::handle:vertical {{
+        width: 14px;
+        height: 10px;
+        margin: -3px -5px;
+        background-color: {TEXT};
+        border: 1px solid {BRONZE};
+        border-radius: 3px;
+    }}
+
+    QSlider#audioVolumeSlider::handle:vertical:hover {{
+        background-color: #F0E2BC;
+        border-color: {TEXT};
+    }}
+
     QLabel#appTitle {{
         color: {TEXT};
         font-family: \"{heading}\", \"{font_family}\";

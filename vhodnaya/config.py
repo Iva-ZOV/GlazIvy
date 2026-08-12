@@ -270,6 +270,8 @@ class CameraConfig:
     stream_path: str = DEFAULT_STREAM_PATH
     show_clock: bool = True
     on_board: bool = True
+    audio_on: bool = False
+    volume: int = 80
     geometry: CameraGeometry = field(default_factory=CameraGeometry)
     source: str = "template"
     stream_url_hd: str = ""
@@ -338,6 +340,12 @@ class CameraConfig:
             raise ConfigError("Параметр часов камеры должен быть логическим.")
         if not isinstance(self.on_board, bool):
             raise ConfigError("Параметр показа камеры на доске должен быть логическим.")
+        if not isinstance(self.audio_on, bool):
+            raise ConfigError("Параметр звука камеры должен быть логическим.")
+        if isinstance(self.volume, bool) or not isinstance(self.volume, int):
+            raise ConfigError("Громкость камеры должна быть целым числом.")
+        if not 0 <= self.volume <= 100:
+            raise ConfigError("Громкость камеры должна быть в диапазоне от 0 до 100.")
         self.geometry.validate()
 
         if self.source == "onvif":
@@ -543,6 +551,8 @@ class ConfigStore:
             ),
             show_clock=_read_bool(payload, "show_clock", True),
             on_board=_read_bool(payload, "on_board", True),
+            audio_on=_read_bool(payload, "audio_on", False),
+            volume=_read_int(payload, "volume", 80),
             geometry=CameraGeometry(
                 x=_read_int(geometry_payload, "x", 24),
                 y=_read_int(geometry_payload, "y", 24),
@@ -602,8 +612,19 @@ class ConfigStore:
             self._load_camera(camera_payload, index)
             for index, camera_payload in enumerate(camera_payloads)
         )
+        # Конфиг остаётся обратно совместимым и чинится мягко: если файл был
+        # отредактирован вручную, выбор первой звучащей камеры побеждает.
+        found_audio = False
+        normalized_cameras: list[CameraConfig] = []
+        for camera in cameras:
+            if camera.audio_on:
+                if found_audio:
+                    camera = camera.updated(audio_on=False)
+                else:
+                    found_audio = True
+            normalized_cameras.append(camera)
         config = AppConfig(
-            cameras=cameras,
+            cameras=tuple(normalized_cameras),
             autostart=_read_bool(payload, "autostart", False),
             layout_mode=str(payload.get("layout_mode", "free")).lower(),
         )
@@ -632,6 +653,8 @@ class ConfigStore:
             "onvif_password_b64": _encode_password(camera.onvif_password),
             "show_clock": camera.show_clock,
             "on_board": camera.on_board,
+            "audio_on": camera.audio_on,
+            "volume": camera.volume,
             "geometry": {
                 "x": geometry.x,
                 "y": geometry.y,

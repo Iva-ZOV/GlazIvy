@@ -14,7 +14,9 @@ a = Analysis(
     pathex=[str(ROOT)],
     binaries=[],
     datas=[(str(ROOT / "assets"), "assets")],
-    hiddenimports=["cv2", "numpy"],
+    # ``av`` импортируется лениво из AudioReader, поэтому Analysis сам его не
+    # увидит. Стандартный hook-av собирает cython-модули и Windows av.libs.
+    hiddenimports=["cv2", "numpy", "av"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(ROOT / "packaging" / "runtime_hook.py")],
@@ -54,4 +56,3 @@ coll = COLLECT(
     upx_exclude=[],
     name="GlazIvy",
 )
-

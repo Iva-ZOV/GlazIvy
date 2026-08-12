@@ -36,9 +36,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QSlider,
     QSizePolicy,
     QSpacerItem,
     QToolTip,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -415,6 +417,68 @@ class LogoGlyph(QWidget):
         )
 
 
+class _VolumeSlider(QSlider):
+    """Слайдер явно принимает мышь и не отдаёт нажатие drag-родителю."""
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        super().mouseMoveEvent(event)
+        event.accept()
+
+
+class AudioVolumePopup(QWidget):
+    """Компактный вертикальный попап громкости поверх видео плитки."""
+
+    volume_changed = Signal(int)
+
+    def __init__(self, volume: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("audioVolumePopup")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setMouseTracking(True)
+        self.setFixedWidth(48)
+        self.setMinimumHeight(68)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(7, 8, 7, 9)
+        layout.setSpacing(5)
+        self.value_label = QLabel(self)
+        self.value_label.setObjectName("audioVolumeValue")
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.value_label)
+
+        self.slider = _VolumeSlider(Qt.Orientation.Vertical, self)
+        self.slider.setObjectName("audioVolumeSlider")
+        self.slider.setRange(0, 100)
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(5)
+        self.slider.setTracking(True)
+        self.slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.slider.setToolTip("Громкость")
+        layout.addWidget(self.slider, 1, Qt.AlignmentFlag.AlignHCenter)
+
+        self.slider.valueChanged.connect(self._value_changed)
+        self.set_volume(volume)
+        self.hide()
+
+    def _value_changed(self, value: int) -> None:
+        self.value_label.setText(str(value))
+        self.volume_changed.emit(value)
+
+    def set_volume(self, volume: int) -> None:
+        value = max(0, min(100, int(volume)))
+        blocked = self.slider.blockSignals(True)
+        self.slider.setValue(value)
+        self.slider.blockSignals(blocked)
+        self.value_label.setText(str(value))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        event.accept()
+
+
 class ToolIconButton(QAbstractButton):
     """Кнопка заголовка с бронзовым глифом и красным опасным состоянием."""
 
@@ -469,10 +533,16 @@ class ToolIconButton(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        if self.kind == "close":
+        if not self.isEnabled():
+            background = _color(BRONZE, 5)
+        elif self.kind == "close":
             background = _color(PRIMARY, int(8 + 50 * self._hover))
             if self.isDown():
                 background = _color(PRIMARY_PRESSED, 230)
+        elif self.kind == "audio_on":
+            background = _color(KHAKI, int(48 + 28 * self._hover))
+            if self.isDown():
+                background = _color(KHAKI, 92)
         else:
             background = _color(BRONZE, int(5 + 24 * self._hover))
             if self.isDown():
@@ -481,8 +551,14 @@ class ToolIconButton(QAbstractButton):
         painter.setBrush(background)
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 3, 3)
 
-        glyph = _color(BRONZE, int(185 + 65 * self._hover))
-        if self.kind == "close" and self._hover > 0.01:
+        glyph = (
+            _color(BRONZE, 74)
+            if not self.isEnabled()
+            else _color(BRONZE, int(185 + 65 * self._hover))
+        )
+        if self.kind == "audio_on" and self.isEnabled():
+            glyph = _blend_color(BRONZE, TEXT, 0.38 + self._hover * 0.42)
+        elif self.kind == "close" and self._hover > 0.01:
             glyph = _color(TEXT)
         pen = QPen(glyph, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
@@ -508,6 +584,26 @@ class ToolIconButton(QAbstractButton):
             tip = QPointF(cx + 4.25, cy - 4.25)
             painter.drawLine(tip, QPointF(cx + 8.0, cy - 4.0))
             painter.drawLine(tip, QPointF(cx + 4.5, cy - 0.25))
+        elif self.kind in {"audio_on", "audio_off", "audio_unavailable"}:
+            speaker = QPainterPath()
+            speaker.moveTo(cx - 7.0, cy - 2.8)
+            speaker.lineTo(cx - 3.8, cy - 2.8)
+            speaker.lineTo(cx + 0.2, cy - 6.1)
+            speaker.lineTo(cx + 0.2, cy + 6.1)
+            speaker.lineTo(cx - 3.8, cy + 2.8)
+            speaker.lineTo(cx - 7.0, cy + 2.8)
+            speaker.closeSubpath()
+            painter.setBrush(glyph)
+            painter.drawPath(speaker)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if self.kind == "audio_on":
+                painter.drawArc(QRectF(cx - 2.8, cy - 4.7, 8.2, 9.4), -58 * 16, 116 * 16)
+                painter.drawArc(QRectF(cx - 3.0, cy - 7.0, 13.0, 14.0), -52 * 16, 104 * 16)
+            else:
+                painter.drawLine(
+                    QPointF(cx + 2.3, cy - 4.6),
+                    QPointF(cx + 8.1, cy + 4.6),
+                )
         elif self.kind == "hide":
             eye = QPainterPath()
             eye.moveTo(cx - 7.0, cy)

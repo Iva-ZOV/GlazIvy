@@ -38,6 +38,7 @@ from ..config import CameraConfig, CameraGeometry, ConfigError
 from ..video import CameraReader
 from .theme import BRONZE, SURFACE_RAISED
 from .widgets import (
+    AudioVolumePopup,
     LogoGlyph,
     StatusPill,
     ToolIconButton,
@@ -53,6 +54,9 @@ class CameraTile(QWidget):
     settings_requested = Signal(str)
     hide_requested = Signal(str)
     expand_requested = Signal(str)
+    audio_toggle_requested = Signal(str)
+    audio_volume_changed = Signal(str, int)
+    audio_reconnect_requested = Signal(str)
 
     MINIMUM_WIDTH = 180
     MINIMUM_HEIGHT = 120
@@ -82,6 +86,8 @@ class CameraTile(QWidget):
         self._interaction_minimum_height = self.MINIMUM_HEIGHT
         self._expanded = False
         self._highlight_opacity = 0.0
+        self._audio_runtime_state = "idle"
+        self._audio_backend_available = True
 
         self.setObjectName("cameraTile")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -119,6 +125,12 @@ class CameraTile(QWidget):
             self.header,
         )
         header_layout.addWidget(self.reconnect_button)
+        self.audio_button = ToolIconButton(
+            "audio_off",
+            "Включить звук",
+            self.header,
+        )
+        header_layout.addWidget(self.audio_button)
         self.hide_button = ToolIconButton(
             "hide",
             "Скрыть с доски",
@@ -131,6 +143,10 @@ class CameraTile(QWidget):
             self.header,
         )
         header_layout.addWidget(self.settings_button)
+
+        # Попап — сосед шапки, а не её ребёнок: opacity-эффект шапки не должен
+        # затрагивать интерактивный слайдер над живым видео.
+        self.volume_popup = AudioVolumePopup(config.volume, self)
 
         self._header_effect = QGraphicsOpacityEffect(self.header)
         self._header_effect.setOpacity(0.0)
@@ -149,6 +165,11 @@ class CameraTile(QWidget):
         self._header_idle_timer.setSingleShot(True)
         self._header_idle_timer.setInterval(self.HEADER_IDLE_TIMEOUT_MS)
         self._header_idle_timer.timeout.connect(self._header_idle_timeout)
+
+        self._volume_hide_timer = QTimer(self)
+        self._volume_hide_timer.setSingleShot(True)
+        self._volume_hide_timer.setInterval(120)
+        self._volume_hide_timer.timeout.connect(self._sync_volume_popup_hover)
 
         self._highlight_animation = QVariantAnimation(self)
         self._highlight_animation.setDuration(150)
@@ -185,7 +206,16 @@ class CameraTile(QWidget):
         self.hide_button.clicked.connect(
             lambda: self.hide_requested.emit(self.config.camera_id)
         )
-        self.reconnect_button.clicked.connect(self.restart_stream)
+        self.reconnect_button.clicked.connect(self._restart_requested)
+        self.audio_button.clicked.connect(
+            lambda: self.audio_toggle_requested.emit(self.config.camera_id)
+        )
+        self.volume_popup.volume_changed.connect(
+            lambda volume: self.audio_volume_changed.emit(
+                self.config.camera_id,
+                volume,
+            )
+        )
         self.video.double_clicked.connect(self._video_double_clicked)
 
         self._drag_targets = {
@@ -234,6 +264,37 @@ class CameraTile(QWidget):
         position = self.header.mapFromGlobal(QCursor.pos())
         return self.header.isVisible() and self.header.rect().contains(position)
 
+    def _pointer_over_audio_controls(self) -> bool:
+        button_position = self.audio_button.mapFromGlobal(QCursor.pos())
+        if (
+            self.audio_button.isVisible()
+            and self.audio_button.rect().contains(button_position)
+        ):
+            return True
+        popup_position = self.volume_popup.mapFromGlobal(QCursor.pos())
+        return self.volume_popup.isVisible() and self.volume_popup.rect().contains(
+            popup_position
+        )
+
+    def _show_volume_popup(self) -> None:
+        if not self.audio_button.isEnabled() or self._shutting_down:
+            return
+        self._volume_hide_timer.stop()
+        self._set_header_visible(True)
+        self._position_overlays()
+        self.volume_popup.show()
+        self.volume_popup.raise_()
+        self._header_idle_timer.start()
+
+    def _sync_volume_popup_hover(self) -> None:
+        if self._shutting_down or not self.volume_popup.isVisible():
+            return
+        if self._pointer_over_audio_controls():
+            self._header_idle_timer.start()
+            return
+        self.volume_popup.hide()
+        QTimer.singleShot(0, self._sync_header_hover)
+
     def _set_status_visible(
         self,
         visible: bool,
@@ -279,13 +340,19 @@ class CameraTile(QWidget):
             self._shutting_down
             or self._interaction is not None
             or self._pointer_over_header()
+            or self._pointer_over_audio_controls()
         ):
+            if self._pointer_over_audio_controls():
+                self._header_idle_timer.start()
             return
         self._set_header_visible(False)
 
     def _set_header_visible(self, visible: bool, *, animate: bool = True) -> None:
         if not visible and self._interaction is not None:
             return
+        if not visible:
+            self._volume_hide_timer.stop()
+            self.volume_popup.hide()
         self._set_highlight_visible(visible and not self._expanded, animate=animate)
         if visible == self._header_target_visible:
             if visible:
@@ -352,6 +419,24 @@ class CameraTile(QWidget):
         self.status.raise_()
         if self.header.isVisible():
             self.header.raise_()
+        popup_height = min(
+            154,
+            max(68, self.height() - self.HEADER_HEIGHT - 4),
+        )
+        self.volume_popup.setFixedHeight(popup_height)
+        header_layout = self.header.layout()
+        if header_layout is not None:
+            header_layout.activate()
+        button_top_left = self.audio_button.mapTo(self, QPoint(0, 0))
+        popup_x = button_top_left.x() + (
+            self.audio_button.width() - self.volume_popup.width()
+        ) // 2
+        popup_x = max(4, min(popup_x, self.width() - self.volume_popup.width() - 4))
+        popup_y = button_top_left.y() + self.audio_button.height() - 2
+        popup_y = max(4, min(popup_y, self.height() - popup_height - 4))
+        self.volume_popup.move(popup_x, popup_y)
+        if self.volume_popup.isVisible():
+            self.volume_popup.raise_()
 
     def _sync_header_content_visibility(self) -> None:
         self.name_label.setVisible(self.width() >= self.NAME_VISIBLE_MINIMUM_WIDTH)
@@ -359,6 +444,23 @@ class CameraTile(QWidget):
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         event_type = event.type()
+        volume_widgets = {
+            self.volume_popup,
+            self.volume_popup.slider,
+            self.volume_popup.value_label,
+        }
+        if watched is self.audio_button:
+            if event_type == QEvent.Type.Enter:
+                self._show_volume_popup()
+            elif event_type == QEvent.Type.Leave:
+                self._volume_hide_timer.start()
+        elif watched in volume_widgets:
+            if event_type in (QEvent.Type.Enter, QEvent.Type.MouseMove):
+                self._volume_hide_timer.stop()
+                self._header_idle_timer.start()
+            elif event_type == QEvent.Type.Leave:
+                self._volume_hide_timer.start()
+
         if event_type in (
             QEvent.Type.Enter,
             QEvent.Type.MouseMove,
@@ -751,10 +853,54 @@ class CameraTile(QWidget):
     def _sync_config_widgets(self) -> None:
         self.name_label.setText(self.config.camera_name)
         self.name_label.setToolTip(self.config.camera_name)
+        self.volume_popup.set_volume(self.config.volume)
+        self._sync_audio_button()
+
+    def _sync_audio_button(self) -> None:
+        configured = self.config.is_configured()
+        if not configured:
+            enabled = False
+            kind = "audio_unavailable"
+            tooltip = "Сначала настройте камеру"
+        elif self._audio_runtime_state == "no_track":
+            enabled = False
+            kind = "audio_unavailable"
+            tooltip = "Аудиодорожка не найдена"
+        elif not self._audio_backend_available:
+            enabled = False
+            kind = "audio_unavailable"
+            tooltip = "Звук недоступен: модуль PyAV не загрузился"
+        else:
+            enabled = True
+            kind = "audio_on" if self.config.audio_on else "audio_off"
+            if not self.config.audio_on:
+                tooltip = "Включить звук"
+            elif self._audio_runtime_state == "reconnecting":
+                tooltip = "Выключить звук · восстанавливаем аудио"
+            elif self._audio_runtime_state == "device_error":
+                tooltip = "Выключить звук · аудиоустройство недоступно"
+            elif self._audio_runtime_state == "connecting":
+                tooltip = "Выключить звук · подключаем аудио"
+            else:
+                tooltip = "Выключить звук"
+        self.audio_button.setEnabled(enabled)
+        self.audio_button.set_kind(kind, tooltip)
+        if not enabled:
+            self.volume_popup.hide()
+
+    def set_audio_backend_available(self, available: bool) -> None:
+        self._audio_backend_available = bool(available)
+        self._sync_audio_button()
+
+    def set_audio_runtime_state(self, state: str) -> None:
+        self._audio_runtime_state = state
+        self._sync_audio_button()
 
     def apply_config(self, config: CameraConfig) -> None:
         previous = self.config
         reconnect = self._connection_signature(previous) != self._connection_signature(config)
+        if reconnect and self._audio_runtime_state == "no_track":
+            self._audio_runtime_state = "idle"
         self.config = config
         self._sync_config_widgets()
         if reconnect or (config.is_configured() and self._current_reader is None):
@@ -765,6 +911,10 @@ class CameraTile(QWidget):
             self.settings_requested.emit(self.config.camera_id)
             return
         self.expand_requested.emit(self.config.camera_id)
+
+    def _restart_requested(self) -> None:
+        self.restart_stream()
+        self.audio_reconnect_requested.emit(self.config.camera_id)
 
     def _set_status_state(self, state: str) -> None:
         self.status.set_state(state)
@@ -892,6 +1042,8 @@ class CameraTile(QWidget):
         self._shutting_down = True
         self._generation += 1
         self._header_idle_timer.stop()
+        self._volume_hide_timer.stop()
+        self.volume_popup.hide()
         self._header_animation.stop()
         self._highlight_animation.stop()
         self._status_animation.stop()
