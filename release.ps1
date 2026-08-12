@@ -56,9 +56,15 @@ function Test-HasBom([string]$path) {
 function Update-File([string]$path, [string]$pattern, [string]$replacement) {
     $hadBom = Test-HasBom $path
     $original = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    # Шаблон обязан находиться: иначе версия молча осталась бы старой.
+    if (-not [regex]::IsMatch($original, $pattern)) {
+        throw "Шаблон версии не найден в $path: $pattern"
+    }
     $updated = [regex]::Replace($original, $pattern, $replacement)
     if ($updated -eq $original) {
-        throw "Версия не подставилась в $path (шаблон не совпал): $pattern"
+        # Повторный прогон (например после -DryRun): уже нужная версия.
+        Write-Host "    уже актуально: $([System.IO.Path]::GetFileName($path))"
+        return
     }
     [System.IO.File]::WriteAllText(
         $path,
