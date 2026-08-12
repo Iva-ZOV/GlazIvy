@@ -77,9 +77,18 @@ try {
     # --- 0. Рабочее дерево обязано быть чистым: релиз собирается из того,
     #        что уже в main, иначе тег будет врать.
     if (-not $DryRun) {
-        $dirty = git status --porcelain
+        # Три файла версии меняет сам скрипт (в том числе на прошлом прогоне
+        # с -DryRun), поэтому их правки ожидаемы и чистоту дерева не портят.
+        $versionFiles = @(
+            "vhodnaya/constants.py",
+            "packaging/version_info.txt",
+            "build.ps1"
+        )
+        $dirty = git status --porcelain | Where-Object {
+            $_ -and ($versionFiles -notcontains $_.Substring(3).Trim())
+        }
         if ($dirty) {
-            throw "Рабочее дерево не чистое — закоммить или спрячь правки:`n$dirty"
+            throw "Рабочее дерево не чистое — закоммить или спрячь правки:`n$($dirty -join "`n")"
         }
         $existing = git tag --list "v$Version"
         if ($existing) { throw "Тег v$Version уже существует." }
