@@ -903,6 +903,7 @@ class MainWindow(QWidget):
         self.surface_layout.removeWidget(self.title_bar)
         self.title_bar.setParent(self.surface)
         self._title_bar_overlay = True
+        self.title_bar.set_overlay_backing(True)
         self._position_fullscreen_title_bar()
         self._set_fullscreen_title_bar_visible(True, animate=False)
         self._title_bar_idle_timer.start()
@@ -916,6 +917,7 @@ class MainWindow(QWidget):
         self._title_bar_animation.stop()
         self._set_fullscreen_title_bar_visible(True, animate=False)
         self.surface_layout.insertWidget(0, self.title_bar)
+        self.title_bar.set_overlay_backing(False)
         self._title_bar_overlay = False
 
     def toggle_fullscreen(self) -> None:

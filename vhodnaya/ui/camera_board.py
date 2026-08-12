@@ -87,6 +87,7 @@ class BoardTitleBar(QWidget):
         self._compact = False
         self._fullscreen = False
         self._discovery_busy = False
+        self._overlay_backing = False
 
         self._layout = QGridLayout(self)
         self._layout.setContentsMargins(16, 0, 10, 0)
@@ -283,6 +284,28 @@ class BoardTitleBar(QWidget):
             "windowed" if fullscreen else "fullscreen",
             "Оконный режим · F11" if fullscreen else "Полный экран · F11",
         )
+
+    def set_overlay_backing(self, enabled: bool) -> None:
+        """Тёмная подложка для оверлея в полном экране: без неё панель
+        просвечивает камерами (в окне фон под ней рисует поверхность)."""
+
+        if enabled == self._overlay_backing:
+            return
+        self._overlay_backing = enabled
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        if not self._overlay_backing:
+            return
+        painter = QPainter(self)
+        backing = QColor(BACKGROUND)
+        backing.setAlpha(230)
+        painter.fillRect(self.rect(), backing)
+        line = QColor(BRONZE)
+        line.setAlpha(70)
+        painter.setPen(QPen(line, 1))
+        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
     def set_discovery_busy(self, busy: bool) -> None:
         self._discovery_busy = busy
