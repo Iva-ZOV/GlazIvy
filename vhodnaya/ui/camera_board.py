@@ -340,6 +340,7 @@ class CameraBoard(QWidget):
     layout_changed = Signal()
     camera_count_changed = Signal(int)
     settings_requested = Signal(str)
+    hide_requested = Signal(str)
 
     GRID_SPACING = 10
 
@@ -367,8 +368,12 @@ class CameraBoard(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(CameraTile.MINIMUM_WIDTH, CameraTile.MINIMUM_HEIGHT)
 
-        for camera in sorted(cameras, key=lambda item: item.geometry.z):
+        for camera in cameras:
             self.add_camera(camera, announce=False)
+        self._z_order = [
+            camera.camera_id
+            for camera in sorted(cameras, key=lambda item: item.geometry.z)
+        ]
         self._raise_in_saved_order()
         self._sync_tile_states()
 
@@ -448,9 +453,18 @@ class CameraBoard(QWidget):
         tile.settings_requested.connect(
             lambda camera_id: self.settings_requested.emit(camera_id)
         )
+        tile.hide_requested.connect(
+            lambda camera_id: self.hide_requested.emit(camera_id)
+        )
         tile.expand_requested.connect(self.toggle_camera_expanded)
 
-    def add_camera(self, config: CameraConfig, *, announce: bool = True) -> CameraTile:
+    def add_camera(
+        self,
+        config: CameraConfig,
+        *,
+        announce: bool = True,
+        index: int | None = None,
+    ) -> CameraTile:
         if config.camera_id in self._tiles:
             raise ValueError("Камера с таким идентификатором уже есть на доске.")
         tile = CameraTile(config, self)
@@ -463,15 +477,18 @@ class CameraBoard(QWidget):
         )
         self._connect_tile(tile)
         self._tiles[config.camera_id] = tile
-        self._tile_order.append(config.camera_id)
-        self._z_order.append(config.camera_id)
+        tile_index = len(self._tile_order) if index is None else int(index)
+        tile_index = max(0, min(tile_index, len(self._tile_order)))
+        self._tile_order.insert(tile_index, config.camera_id)
+        z_index = max(0, min(config.geometry.z, len(self._z_order)))
+        self._z_order.insert(z_index, config.camera_id)
         self._free_geometries[config.camera_id] = config.geometry
         tile.show()
-        tile.raise_()
         if self.isVisible():
             self._apply_current_layout()
         else:
             self._sync_tile_states()
+            self._raise_in_saved_order()
         self.update()
         if announce:
             self.camera_count_changed.emit(self.camera_count())
@@ -561,14 +578,44 @@ class CameraBoard(QWidget):
     ) -> tuple[CameraConfig, ...]:
         replacements = replacements or {}
         result: list[CameraConfig] = []
-        for z_index, camera_id in enumerate(self._z_order):
+        z_positions = {
+            camera_id: z_index
+            for z_index, camera_id in enumerate(self._z_order)
+        }
+        for camera_id in self._tile_order:
             tile = self._tiles.get(camera_id)
             if tile is None:
                 continue
             source = replacements.get(camera_id, tile.config)
             geometry = self._free_geometries.get(camera_id, source.geometry)
-            result.append(source.updated(geometry=geometry.updated(z=z_index)))
+            result.append(
+                source.updated(
+                    geometry=geometry.updated(z=z_positions.get(camera_id, 0))
+                )
+            )
         return tuple(result)
+
+    def set_tile_order(self, visible_ids: tuple[str, ...]) -> bool:
+        """Применяет канонический порядок видимых камер, не меняя stacking."""
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for camera_id in visible_ids:
+            if camera_id not in self._tiles or camera_id in seen:
+                continue
+            ordered.append(camera_id)
+            seen.add(camera_id)
+        for camera_id in self._tile_order:
+            if camera_id in self._tiles and camera_id not in seen:
+                ordered.append(camera_id)
+                seen.add(camera_id)
+        if ordered == self._tile_order:
+            return False
+        self._tile_order = ordered
+        if self._layout_mode == "grid" and self._expanded_camera_id is None:
+            self._apply_grid_layout()
+        self.update()
+        return True
 
     def replace_camera_config(self, config: CameraConfig) -> bool:
         tile = self._tiles.get(config.camera_id)

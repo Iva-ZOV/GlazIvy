@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QMouseEvent, QShowEvent
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -23,7 +31,7 @@ from ..config import CameraConfig
 from ..onvif import DiscoveredCamera
 from ..resources import application_icon
 from .forms import CameraForm
-from .theme import SUCCESS, TEXT_MUTED, WARNING
+from .theme import BRONZE, SUCCESS, TEXT_MUTED, WARNING
 from .widgets import (
     GrainFrame,
     LogoGlyph,
@@ -124,6 +132,23 @@ class FramelessDialog(QDialog):
             available.center().x() - self.width() // 2,
             available.center().y() - self.height() // 2,
         )
+
+
+def _dialog_mascot(
+    kind: str,
+    max_size: QSize,
+    parent: QWidget,
+) -> QLabel:
+    label = QLabel(parent)
+    label.setFixedSize(max_size)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    pixmap = _mascot_pixmap(kind, max_size, parent.devicePixelRatioF())
+    if pixmap is None:
+        label.hide()
+    else:
+        label.setPixmap(pixmap)
+    return label
 
 
 class OnvifProgressDialog(FramelessDialog):
@@ -336,11 +361,64 @@ class OnvifDiscoveryDialog(FramelessDialog):
         return tuple(camera for check, camera in self._rows if check.isChecked())
 
 
+class _CameraListGrip(QWidget):
+    drag_pressed = Signal(QPoint)
+    drag_moved = Signal(QPoint)
+    drag_released = Signal(QPoint)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pressed = False
+        self.setFixedSize(24, 36)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("Перетащить камеру")
+        self.setAccessibleName("Изменить порядок камеры")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.grabMouse()
+            self.drag_pressed.emit(event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._pressed:
+            self.drag_moved.emit(event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._pressed and event.button() == Qt.MouseButton.LeftButton:
+            self._pressed = False
+            self.releaseMouse()
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.drag_released.emit(event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor(BRONZE)
+        color.setAlpha(175)
+        painter.setPen(QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for x in (9, 15):
+            for y in (12, 18, 24):
+                painter.drawPoint(x, y)
+
+
 class CameraListDialog(FramelessDialog):
     """Полный список камер с мгновенным управлением видимостью на доске."""
 
     toggle_requested = Signal(str, bool)
     settings_requested = Signal(str)
+    order_changed = Signal(tuple)
 
     def __init__(
         self,
@@ -353,26 +431,48 @@ class CameraListDialog(FramelessDialog):
             preferred_width=720,
             preferred_height=560,
         )
+        self._cameras: tuple[CameraConfig, ...] = ()
         self._checks: dict[str, QCheckBox] = {}
+        self._row_widgets: list[tuple[str, QFrame]] = []
+        self._rows_widget: QWidget | None = None
+        self._drop_indicator: QFrame | None = None
+        self._drag_camera_id: str | None = None
+        self._drag_origin = QPoint()
+        self._drag_target_index: int | None = None
+        self._dragging = False
 
         content = QWidget(self.surface)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(28, 16, 22, 26)
         layout.setSpacing(14)
 
+        intro = QHBoxLayout()
+        intro.setSpacing(16)
+        intro_copy = QVBoxLayout()
+        intro_copy.setSpacing(8)
+
         title = QLabel("Все камеры", content)
         title.setObjectName("dialogTitle")
         set_heading_capitalization(title)
-        layout.addWidget(title)
+        intro_copy.addWidget(title)
 
         subtitle = QLabel(
-            "Галочка показывает камеру на доске. Скрытая камера остаётся "
-            "в списке, её поток не подключается.",
+            "Перетаскивайте строки, чтобы менять порядок камер. Галочка "
+            "управляет показом на доске; скрытая камера остаётся в списке.",
             content,
         )
         subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        intro_copy.addWidget(subtitle)
+        intro_copy.addStretch(1)
+        intro.addLayout(intro_copy, 1)
+        self.mascot = _dialog_mascot("list", QSize(104, 124), content)
+        intro.addWidget(
+            self.mascot,
+            0,
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+        )
+        layout.addLayout(intro)
 
         self.scroll = QScrollArea(content)
         self.scroll.setWidgetResizable(True)
@@ -392,6 +492,11 @@ class CameraListDialog(FramelessDialog):
         self.refresh(cameras)
 
     def refresh(self, cameras: tuple[CameraConfig, ...]) -> None:
+        self._cameras = tuple(cameras)
+        self._cancel_drag()
+        self._populate_rows()
+
+    def _populate_rows(self) -> None:
         old_rows = self.scroll.takeWidget()
         if old_rows is not None:
             old_rows.deleteLater()
@@ -401,19 +506,39 @@ class CameraListDialog(FramelessDialog):
         rows_layout.setContentsMargins(2, 2, 8, 2)
         rows_layout.setSpacing(9)
         self._checks = {}
+        self._row_widgets = []
+        self._rows_widget = rows_widget
 
-        if not cameras:
+        if not self._cameras:
             empty = QLabel("Пока нет камер", rows_widget)
             empty.setObjectName("discoveryAddress")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             rows_layout.addWidget(empty, 1)
         else:
-            for camera in cameras:
+            for camera in self._cameras:
                 row = QFrame(rows_widget)
                 row.setObjectName("discoveryRow")
                 row_layout = QHBoxLayout(row)
                 row_layout.setContentsMargins(14, 10, 14, 10)
                 row_layout.setSpacing(14)
+
+                grip = _CameraListGrip(row)
+                grip.drag_pressed.connect(
+                    lambda position, camera_id=camera.camera_id: (
+                        self._drag_pressed(camera_id, position)
+                    )
+                )
+                grip.drag_moved.connect(
+                    lambda position, camera_id=camera.camera_id: (
+                        self._drag_moved(camera_id, position)
+                    )
+                )
+                grip.drag_released.connect(
+                    lambda position, camera_id=camera.camera_id: (
+                        self._drag_released(camera_id, position)
+                    )
+                )
+                row_layout.addWidget(grip)
 
                 check = QCheckBox(camera.camera_name.replace("&", "&&"), row)
                 check.setChecked(camera.on_board)
@@ -448,9 +573,124 @@ class CameraListDialog(FramelessDialog):
                 )
                 row_layout.addWidget(settings)
                 rows_layout.addWidget(row)
+                self._row_widgets.append((camera.camera_id, row))
             rows_layout.addStretch(1)
 
+        self._drop_indicator = QFrame(rows_widget)
+        self._drop_indicator.setStyleSheet(
+            f"background-color: {BRONZE}; border: none;"
+        )
+        self._drop_indicator.setFixedHeight(3)
+        self._drop_indicator.hide()
         self.scroll.setWidget(rows_widget)
+
+    def _cancel_drag(self) -> None:
+        self._drag_camera_id = None
+        self._drag_target_index = None
+        self._dragging = False
+        if self._drop_indicator is not None:
+            self._drop_indicator.hide()
+
+    def _drag_pressed(self, camera_id: str, position: QPoint) -> None:
+        if not any(row_id == camera_id for row_id, _ in self._row_widgets):
+            return
+        self._drag_camera_id = camera_id
+        self._drag_origin = position
+        self._drag_target_index = None
+        self._dragging = False
+
+    def _drag_moved(self, camera_id: str, position: QPoint) -> None:
+        if camera_id != self._drag_camera_id:
+            return
+        if not self._dragging:
+            distance = (position - self._drag_origin).manhattanLength()
+            if distance < QApplication.startDragDistance():
+                return
+            self._dragging = True
+        self._update_drop_target(position)
+
+    def _drag_released(self, camera_id: str, position: QPoint) -> None:
+        if camera_id != self._drag_camera_id:
+            return
+        was_dragging = self._dragging
+        if was_dragging:
+            self._update_drop_target(position)
+        target_index = self._drag_target_index
+        self._cancel_drag()
+        if not was_dragging or target_index is None:
+            return
+
+        cameras = list(self._cameras)
+        source_index = next(
+            (
+                index
+                for index, camera in enumerate(cameras)
+                if camera.camera_id == camera_id
+            ),
+            None,
+        )
+        if source_index is None:
+            return
+        camera = cameras.pop(source_index)
+        target_index = max(0, min(target_index, len(cameras)))
+        cameras.insert(target_index, camera)
+        reordered = tuple(cameras)
+        if reordered == self._cameras:
+            return
+        self._cameras = reordered
+        self._populate_rows()
+        self.order_changed.emit(
+            tuple(camera.camera_id for camera in self._cameras)
+        )
+
+    def _update_drop_target(self, global_position: QPoint) -> None:
+        rows_widget = self._rows_widget
+        indicator = self._drop_indicator
+        camera_id = self._drag_camera_id
+        if rows_widget is None or indicator is None or camera_id is None:
+            return
+
+        viewport = self.scroll.viewport()
+        viewport_position = viewport.mapFromGlobal(global_position)
+        scroll_bar = self.scroll.verticalScrollBar()
+        edge = 28
+        if viewport_position.y() < edge:
+            scroll_bar.setValue(scroll_bar.value() - 18)
+        elif viewport_position.y() > viewport.height() - edge:
+            scroll_bar.setValue(scroll_bar.value() + 18)
+
+        position = rows_widget.mapFromGlobal(global_position)
+        other_rows = [
+            row
+            for row_id, row in self._row_widgets
+            if row_id != camera_id
+        ]
+        target_index = sum(
+            row.geometry().center().y() < position.y()
+            for row in other_rows
+        )
+        self._drag_target_index = target_index
+        if not other_rows:
+            indicator.hide()
+            return
+
+        if target_index == 0:
+            line_y = other_rows[0].geometry().top() - 5
+        elif target_index == len(other_rows):
+            line_y = other_rows[-1].geometry().bottom() + 5
+        else:
+            line_y = (
+                other_rows[target_index - 1].geometry().bottom()
+                + other_rows[target_index].geometry().top()
+            ) // 2
+        indicator.setGeometry(
+            10,
+            max(1, line_y - 1),
+            max(1, rows_widget.width() - 28),
+            3,
+        )
+        indicator.raise_()
+        indicator.show()
 
     def set_camera_on_board(self, camera_id: str, on_board: bool) -> None:
         check = self._checks.get(camera_id)
@@ -481,17 +721,31 @@ class SettingsDialog(FramelessDialog):
         content_layout.setContentsMargins(28, 14, 20, 24)
         content_layout.setSpacing(15)
 
+        intro = QHBoxLayout()
+        intro.setSpacing(16)
+        intro_copy = QVBoxLayout()
+        intro_copy.setSpacing(8)
+
         title = QLabel("Параметры камеры", content)
         title.setObjectName("dialogTitle")
         set_heading_capitalization(title)
-        content_layout.addWidget(title)
+        intro_copy.addWidget(title)
         subtitle = QLabel(
             "Изменения адреса, транспорта или потока применятся сразу после сохранения.",
             content,
         )
         subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
-        content_layout.addWidget(subtitle)
+        intro_copy.addWidget(subtitle)
+        intro_copy.addStretch(1)
+        intro.addLayout(intro_copy, 1)
+        self.mascot = _dialog_mascot("wrench", QSize(104, 124), content)
+        intro.addWidget(
+            self.mascot,
+            0,
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+        )
+        content_layout.addLayout(intro)
 
         scroll = QScrollArea(content)
         scroll.setWidgetResizable(True)

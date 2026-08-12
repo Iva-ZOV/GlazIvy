@@ -5,6 +5,7 @@ build/
 dist/
 release/
 _probe/
+_preview_dialogs/
 *.spec.bak
 
 # Сгенерированная иконка (создаётся scripts/generate_icon.py при сборке)

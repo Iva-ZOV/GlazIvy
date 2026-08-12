@@ -169,6 +169,9 @@ class MainWindow(QWidget):
         self.board.camera_count_changed.connect(self._sync_camera_summary)
         self.board.layout_changed.connect(self._schedule_save)
         self.board.settings_requested.connect(self.open_camera_settings)
+        self.board.hide_requested.connect(
+            lambda camera_id: self._set_camera_on_board(camera_id, False)
+        )
         self._sync_camera_summary()
 
         self.fullscreen_shortcut = QShortcut(QKeySequence("F11"), self)
@@ -221,20 +224,26 @@ class MainWindow(QWidget):
     ) -> AppConfig:
         replacements = replacements or {}
         board_cameras = self.board.camera_configs(replacements)
-        visible = [camera for camera in board_cameras if camera.on_board]
-        visible_ids = {camera.camera_id for camera in visible}
-        hidden: list[CameraConfig] = []
+        board_by_id = {
+            camera.camera_id: camera
+            for camera in board_cameras
+        }
+        stored_ids = {camera.camera_id for camera in self.config.cameras}
+        cameras: list[CameraConfig] = []
         for stored in self.config.cameras:
-            if stored.camera_id in visible_ids:
-                continue
-            source = replacements.get(stored.camera_id, stored)
-            hidden.append(source)
-        cameras = tuple(
-            camera.updated(geometry=camera.geometry.updated(z=index))
-            for index, camera in enumerate((*visible, *hidden))
+            board_camera = board_by_id.get(stored.camera_id)
+            cameras.append(
+                board_camera
+                if board_camera is not None
+                else replacements.get(stored.camera_id, stored)
+            )
+        cameras.extend(
+            camera
+            for camera in board_cameras
+            if camera.camera_id not in stored_ids
         )
         return AppConfig(
-            cameras=cameras,
+            cameras=tuple(cameras),
             autostart=self.config.autostart if autostart is None else autostart,
             layout_mode=(
                 self.config.layout_mode if layout_mode is None else layout_mode
@@ -292,6 +301,34 @@ class MainWindow(QWidget):
         dialog = self._camera_list_dialog
         if dialog is not None:
             dialog.refresh(self.config.cameras)
+
+    def _reorder_cameras(self, camera_ids: tuple[str, ...]) -> bool:
+        snapshot = self._snapshot_config()
+        current_ids = tuple(camera.camera_id for camera in snapshot.cameras)
+        requested_ids = tuple(camera_ids)
+        if (
+            len(requested_ids) != len(current_ids)
+            or len(set(requested_ids)) != len(requested_ids)
+            or set(requested_ids) != set(current_ids)
+        ):
+            self._refresh_camera_list()
+            return False
+
+        by_id = {camera.camera_id: camera for camera in snapshot.cameras}
+        candidate = snapshot.updated(
+            cameras=tuple(by_id[camera_id] for camera_id in requested_ids)
+        )
+        if not self._persist_candidate(candidate):
+            self._refresh_camera_list()
+            return False
+
+        visible_ids = tuple(
+            camera.camera_id
+            for camera in candidate.cameras
+            if camera.on_board
+        )
+        self.board.set_tile_order(visible_ids)
+        return True
 
     def add_camera(self) -> None:
         self.board.create_camera()
@@ -524,6 +561,7 @@ class MainWindow(QWidget):
         self._camera_list_dialog = dialog
         dialog.toggle_requested.connect(self._set_camera_on_board)
         dialog.settings_requested.connect(self.open_camera_settings)
+        dialog.order_changed.connect(self._reorder_cameras)
         try:
             dialog.exec()
         finally:
@@ -572,7 +610,11 @@ class MainWindow(QWidget):
             if camera.camera_id == camera_id
         )
         if on_board:
-            self.board.add_camera(applied)
+            visible_index = sum(
+                camera.on_board
+                for camera in candidate.cameras[: candidate.cameras.index(applied)]
+            )
+            self.board.add_camera(applied, index=visible_index)
         else:
             self.board.remove_camera(camera_id)
         self._sync_camera_summary()
@@ -592,14 +634,9 @@ class MainWindow(QWidget):
             if dialog.delete_requested:
                 snapshot = self._snapshot_config()
                 remaining = tuple(
-                    camera.updated(
-                        geometry=camera.geometry.updated(z=index)
-                    )
-                    for index, camera in enumerate(
-                        camera
-                        for camera in snapshot.cameras
-                        if camera.camera_id != camera_id
-                    )
+                    camera
+                    for camera in snapshot.cameras
+                    if camera.camera_id != camera_id
                 )
                 candidate = snapshot.updated(cameras=remaining)
                 if self._persist_candidate(candidate):

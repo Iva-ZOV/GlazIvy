@@ -212,12 +212,14 @@ _mascot_sources: dict[str, Image.Image | None] = {}
 _mascot_cache: dict[tuple[str, int, int, int], QPixmap] = {}
 _MASCOT_FILES = {
     "calm": "mascot_calm.png",
+    "list": "mascot_list.png",
     "sad": "mascot_sad.png",
     "search": "mascot_search.png",
     "scan_1": "mascot_scan_1.png",
     "scan_2": "mascot_scan_2.png",
     "scan_3": "mascot_scan_3.png",
     "scan_4": "mascot_scan_4.png",
+    "wrench": "mascot_wrench.png",
 }
 
 
@@ -506,6 +508,17 @@ class ToolIconButton(QAbstractButton):
             tip = QPointF(cx + 4.25, cy - 4.25)
             painter.drawLine(tip, QPointF(cx + 8.0, cy - 4.0))
             painter.drawLine(tip, QPointF(cx + 4.5, cy - 0.25))
+        elif self.kind == "hide":
+            eye = QPainterPath()
+            eye.moveTo(cx - 7.0, cy)
+            eye.cubicTo(cx - 3.6, cy - 4.6, cx + 3.6, cy - 4.6, cx + 7.0, cy)
+            eye.cubicTo(cx + 3.6, cy + 4.6, cx - 3.6, cy + 4.6, cx - 7.0, cy)
+            painter.drawPath(eye)
+            painter.drawEllipse(QPointF(cx, cy), 2.15, 2.15)
+            painter.drawLine(
+                QPointF(cx - 7.0, cy - 7.0),
+                QPointF(cx + 7.0, cy + 7.0),
+            )
         elif self.kind == "settings":
             painter.drawEllipse(QPointF(cx, cy), 3.2, 3.2)
             painter.drawEllipse(QPointF(cx, cy), 6.0, 6.0)

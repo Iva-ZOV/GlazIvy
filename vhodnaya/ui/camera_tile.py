@@ -49,6 +49,7 @@ class CameraTile(QWidget):
     raise_requested = Signal(str)
     layout_changed = Signal(str)
     settings_requested = Signal(str)
+    hide_requested = Signal(str)
     expand_requested = Signal(str)
 
     MINIMUM_WIDTH = 520
@@ -113,6 +114,12 @@ class CameraTile(QWidget):
             self.header,
         )
         header_layout.addWidget(self.reconnect_button)
+        self.hide_button = ToolIconButton(
+            "hide",
+            "Скрыть с доски",
+            self.header,
+        )
+        header_layout.addWidget(self.hide_button)
         self.settings_button = ToolIconButton(
             "settings",
             "Настройки камеры",
@@ -169,6 +176,9 @@ class CameraTile(QWidget):
 
         self.settings_button.clicked.connect(
             lambda: self.settings_requested.emit(self.config.camera_id)
+        )
+        self.hide_button.clicked.connect(
+            lambda: self.hide_requested.emit(self.config.camera_id)
         )
         self.reconnect_button.clicked.connect(self.restart_stream)
         self.video.double_clicked.connect(self._video_double_clicked)
