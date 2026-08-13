@@ -275,6 +275,10 @@ class CameraConfig:
     on_board: bool = True
     audio_on: bool = False
     volume: int = 80
+    detect_enabled: bool = False
+    detect_persons: bool = True
+    detect_vehicles: bool = True
+    detect_sensitivity: int = 50
     geometry: CameraGeometry = field(default_factory=CameraGeometry)
     source: str = "template"
     stream_url_hd: str = ""
@@ -349,6 +353,21 @@ class CameraConfig:
             raise ConfigError("Громкость камеры должна быть целым числом.")
         if not 0 <= self.volume <= 100:
             raise ConfigError("Громкость камеры должна быть в диапазоне от 0 до 100.")
+        if not isinstance(self.detect_enabled, bool):
+            raise ConfigError("Параметр распознавания должен быть логическим.")
+        if not isinstance(self.detect_persons, bool):
+            raise ConfigError("Параметр распознавания людей должен быть логическим.")
+        if not isinstance(self.detect_vehicles, bool):
+            raise ConfigError("Параметр распознавания машин должен быть логическим.")
+        if (
+            isinstance(self.detect_sensitivity, bool)
+            or not isinstance(self.detect_sensitivity, int)
+        ):
+            raise ConfigError("Чувствительность распознавания должна быть целым числом.")
+        if not 0 <= self.detect_sensitivity <= 100:
+            raise ConfigError(
+                "Чувствительность распознавания должна быть в диапазоне от 0 до 100."
+            )
         self.geometry.validate()
 
         if self.source == "onvif":
@@ -578,6 +597,10 @@ class ConfigStore:
             on_board=_read_bool(payload, "on_board", True),
             audio_on=_read_bool(payload, "audio_on", False),
             volume=_read_int(payload, "volume", 80),
+            detect_enabled=_read_bool(payload, "detect_enabled", False),
+            detect_persons=_read_bool(payload, "detect_persons", True),
+            detect_vehicles=_read_bool(payload, "detect_vehicles", True),
+            detect_sensitivity=_read_int(payload, "detect_sensitivity", 50),
             geometry=CameraGeometry(
                 x=_read_int(geometry_payload, "x", 24),
                 y=_read_int(geometry_payload, "y", 24),
@@ -691,6 +714,10 @@ class ConfigStore:
             "on_board": camera.on_board,
             "audio_on": camera.audio_on,
             "volume": camera.volume,
+            "detect_enabled": camera.detect_enabled,
+            "detect_persons": camera.detect_persons,
+            "detect_vehicles": camera.detect_vehicles,
+            "detect_sensitivity": camera.detect_sensitivity,
             "geometry": {
                 "x": geometry.x,
                 "y": geometry.y,

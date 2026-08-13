@@ -28,3 +28,10 @@ HD_STARTUP_GRACE_SECONDS = 65.0
 
 RECONNECT_INITIAL_SECONDS = 1.0
 RECONNECT_MAX_SECONDS = 6.0
+
+# Единый детектор обрабатывает каждую включённую камеру не чаще двух раз
+# в секунду; при медленном CPU почтовый ящик сам снижает фактический темп.
+DETECTION_INFERENCES_PER_SECOND = 2.0
+DETECTION_RESULT_TTL_SECONDS = 1.5
+DETECTION_MODEL_FILENAME = "yolox_tiny.onnx"
+DETECTION_ONNX_INTRA_OP_THREADS = 3

@@ -220,6 +220,58 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         font-weight: 600;
     }}
 
+    QLabel#detectionSensitivityValue {{
+        color: {WARNING};
+        font-size: 12px;
+        font-weight: 700;
+    }}
+
+    QLabel#detectionSensitivityValue:disabled {{
+        color: rgba(184, 155, 106, 92);
+    }}
+
+    QSlider#detectionSensitivity {{
+        min-height: 24px;
+        background: transparent;
+    }}
+
+    QSlider#detectionSensitivity::groove:horizontal {{
+        height: 4px;
+        background-color: #303228;
+        border: 1px solid rgba(184, 155, 106, 42);
+        border-radius: 2px;
+    }}
+
+    QSlider#detectionSensitivity::sub-page:horizontal {{
+        background-color: {KHAKI};
+        border-radius: 2px;
+    }}
+
+    QSlider#detectionSensitivity::handle:horizontal {{
+        width: 14px;
+        height: 14px;
+        margin: -6px 0;
+        background-color: {TEXT};
+        border: 1px solid {BRONZE};
+        border-radius: 7px;
+    }}
+
+    QSlider#detectionSensitivity::handle:horizontal:hover {{
+        background-color: #F0E2BC;
+        border-color: {TEXT};
+    }}
+
+    QSlider#detectionSensitivity::groove:horizontal:disabled,
+    QSlider#detectionSensitivity::sub-page:horizontal:disabled {{
+        background-color: rgba(42, 44, 36, 110);
+        border-color: rgba(184, 155, 106, 24);
+    }}
+
+    QSlider#detectionSensitivity::handle:horizontal:disabled {{
+        background-color: rgba(184, 155, 106, 80);
+        border-color: rgba(184, 155, 106, 35);
+    }}
+
     QFrame#settingsRow {{
         background-color: rgba(42, 44, 36, 128);
         border: 1px solid rgba(184, 155, 106, 38);

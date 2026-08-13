@@ -1,6 +1,7 @@
 # Runtime
 PySide6>=6.7,<7
 opencv-python-headless>=4.10,<5
+onnxruntime>=1.20,<2
 av>=15.1,<16
 Pillow>=10.4,<12  # BOX-масштабирование пиксель-арта маскота + генерация .ico
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QGridLayout,
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QSizePolicy,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -20,6 +22,7 @@ from ..config import (
     extract_stream_credentials,
     replace_stream_credentials,
 )
+from ..detection import detection_model_path
 from .widgets import SegmentedControl
 
 
@@ -206,6 +209,62 @@ class CameraForm(QWidget):
         timeout_help.setWordWrap(True)
         root.addWidget(timeout_help)
 
+        detection_section = QLabel("Распознавание", self)
+        detection_section.setObjectName("sectionTitle")
+        root.addWidget(detection_section)
+
+        self.detect_enabled_check = QCheckBox("Распознавать объекты", self)
+        self.detect_enabled_check.setChecked(config.detect_enabled)
+        root.addWidget(self.detect_enabled_check)
+
+        detection_classes = QHBoxLayout()
+        detection_classes.setContentsMargins(22, 0, 0, 0)
+        detection_classes.setSpacing(22)
+        self.detect_persons_check = QCheckBox("Людей", self)
+        self.detect_persons_check.setChecked(config.detect_persons)
+        self.detect_vehicles_check = QCheckBox("Машины", self)
+        self.detect_vehicles_check.setChecked(config.detect_vehicles)
+        detection_classes.addWidget(self.detect_persons_check)
+        detection_classes.addWidget(self.detect_vehicles_check)
+        detection_classes.addStretch(1)
+        root.addLayout(detection_classes)
+
+        sensitivity_header = QHBoxLayout()
+        sensitivity_header.setContentsMargins(22, 0, 0, 0)
+        sensitivity_caption = QLabel("Чувствительность", self)
+        sensitivity_caption.setObjectName("fieldLabel")
+        self.sensitivity_value = QLabel(str(config.detect_sensitivity), self)
+        self.sensitivity_value.setObjectName("detectionSensitivityValue")
+        sensitivity_header.addWidget(sensitivity_caption)
+        sensitivity_header.addStretch(1)
+        sensitivity_header.addWidget(self.sensitivity_value)
+        root.addLayout(sensitivity_header)
+
+        self.detect_sensitivity_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.detect_sensitivity_slider.setObjectName("detectionSensitivity")
+        self.detect_sensitivity_slider.setRange(0, 100)
+        self.detect_sensitivity_slider.setValue(config.detect_sensitivity)
+        self.detect_sensitivity_slider.setSingleStep(1)
+        self.detect_sensitivity_slider.setPageStep(10)
+        slider_row = QHBoxLayout()
+        slider_row.setContentsMargins(22, 0, 0, 0)
+        slider_row.addWidget(self.detect_sensitivity_slider)
+        root.addLayout(slider_row)
+
+        self.detection_model_error = QLabel(
+            "Модель не найдена — запустите scripts\\fetch_model.py",
+            self,
+        )
+        self.detection_model_error.setObjectName("errorText")
+        self.detection_model_error.setWordWrap(True)
+        root.addWidget(self.detection_model_error)
+
+        self.detect_enabled_check.toggled.connect(self._sync_detection_controls)
+        self.detect_sensitivity_slider.valueChanged.connect(
+            lambda value: self.sensitivity_value.setText(str(value))
+        )
+        self._sync_detection_controls(config.detect_enabled)
+
         self.error_label = QLabel(self)
         self.error_label.setObjectName("errorText")
         self.error_label.setWordWrap(True)
@@ -217,6 +276,18 @@ class CameraForm(QWidget):
     def _toggle_password(self, visible: bool) -> None:
         self.password_edit.setEchoMode(
             QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        )
+
+    def _sync_detection_controls(self, enabled: bool) -> None:
+        for widget in (
+            self.detect_persons_check,
+            self.detect_vehicles_check,
+            self.detect_sensitivity_slider,
+            self.sensitivity_value,
+        ):
+            widget.setEnabled(enabled)
+        self.detection_model_error.setVisible(
+            enabled and not detection_model_path().is_file()
         )
 
     @staticmethod
@@ -245,6 +316,10 @@ class CameraForm(QWidget):
             transport=self.transport_control.value(),
             quality=self.quality_control.value(),
             stream_path=self.path_edit.text().strip(),
+            detect_enabled=self.detect_enabled_check.isChecked(),
+            detect_persons=self.detect_persons_check.isChecked(),
+            detect_vehicles=self.detect_vehicles_check.isChecked(),
+            detect_sensitivity=self.detect_sensitivity_slider.value(),
         )
         if self._base_config.source == "onvif":
             username = self.username_edit.text()

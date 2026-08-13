@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from ..config import CameraConfig, CameraGeometry
 from ..constants import APP_NAME
+from ..detection import DetectionEngine
 from .camera_tile import CameraTile
 from .theme import BACKGROUND, BRONZE, KHAKI, TEXT, TEXT_MUTED
 from .widgets import (
@@ -381,6 +382,7 @@ class CameraBoard(QWidget):
         if layout_mode not in {"free", "grid"}:
             raise ValueError("Неизвестный режим раскладки.")
         self._tiles: dict[str, CameraTile] = {}
+        self.detection_engine = DetectionEngine()
         self._tile_order: list[str] = []
         self._z_order: list[str] = []
         self._free_geometries: dict[str, CameraGeometry] = {}
@@ -507,7 +509,11 @@ class CameraBoard(QWidget):
     ) -> CameraTile:
         if config.camera_id in self._tiles:
             raise ValueError("Камера с таким идентификатором уже есть на доске.")
-        tile = CameraTile(config, self)
+        tile = CameraTile(
+            config,
+            self,
+            detection_engine=self.detection_engine,
+        )
         geometry = config.geometry
         tile.setGeometry(
             geometry.x,
@@ -1000,3 +1006,4 @@ class CameraBoard(QWidget):
     def shutdown(self) -> None:
         for tile in self._tiles.values():
             tile.shutdown()
+        self.detection_engine.shutdown()

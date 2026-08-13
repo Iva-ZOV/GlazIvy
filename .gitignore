@@ -11,6 +11,9 @@ _preview_dialogs/
 # Сгенерированная иконка (создаётся scripts/generate_icon.py при сборке)
 assets/app_icon.ico
 
+# Модель детектора скачивается scripts/fetch_model.py перед запуском/сборкой.
+/assets/models/
+
 # --- Python ---
 __pycache__/
 *.py[cod]

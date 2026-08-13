@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QCursor,
+    QImage,
     QMouseEvent,
     QPaintEvent,
     QPainter,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import CameraConfig, CameraGeometry, ConfigError
+from ..detection import DetectionEngine, DetectionResult
 from ..video import CameraReader
 from .theme import BRONZE, SURFACE_RAISED
 from .widgets import (
@@ -67,9 +69,16 @@ class CameraTile(QWidget):
     LOGO_VISIBLE_MINIMUM_WIDTH = 230
     FALLBACK_VIDEO_ASPECT = 16 / 9
 
-    def __init__(self, config: CameraConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: CameraConfig,
+        parent: QWidget | None = None,
+        *,
+        detection_engine: DetectionEngine | None = None,
+    ) -> None:
         super().__init__(parent)
         self.config = config
+        self._detection_engine = detection_engine
         self._generation = 0
         self._readers: dict[int, CameraReader] = {}
         self._current_reader: CameraReader | None = None
@@ -217,6 +226,11 @@ class CameraTile(QWidget):
             )
         )
         self.video.double_clicked.connect(self._video_double_clicked)
+        if self._detection_engine is not None:
+            self._detection_engine.signals.result_ready.connect(
+                self._on_detection_result
+            )
+            self._detection_engine.configure_camera(config)
 
         self._drag_targets = {
             self.header,
@@ -247,6 +261,15 @@ class CameraTile(QWidget):
             config.onvif_media_endpoint,
             config.onvif_username,
             config.onvif_password,
+        )
+
+    @staticmethod
+    def _detection_signature(config: CameraConfig) -> tuple[object, ...]:
+        return (
+            config.detect_enabled,
+            config.detect_persons,
+            config.detect_vehicles,
+            config.detect_sensitivity,
         )
 
     def _install_pointer_filters(self) -> None:
@@ -899,10 +922,21 @@ class CameraTile(QWidget):
     def apply_config(self, config: CameraConfig) -> None:
         previous = self.config
         reconnect = self._connection_signature(previous) != self._connection_signature(config)
+        detection_changed = (
+            self._detection_signature(previous) != self._detection_signature(config)
+        )
         if reconnect and self._audio_runtime_state == "no_track":
             self._audio_runtime_state = "idle"
         self.config = config
         self._sync_config_widgets()
+        if detection_changed:
+            self.video.clear_detections()
+        if self._detection_engine is not None:
+            detection_started = self._detection_engine.configure_camera(config)
+            if not detection_started:
+                self.video.clear_detections()
+        elif not config.detect_enabled:
+            self.video.clear_detections()
         if reconnect or (config.is_configured() and self._current_reader is None):
             self.restart_stream()
 
@@ -971,10 +1005,34 @@ class CameraTile(QWidget):
         self._current_reader = reader
         reader.start()
 
-    def _on_frame(self, image: object, generation: int) -> None:
+    def _on_frame(self, image: QImage, generation: int) -> None:
         if generation != self._generation or self._shutting_down:
             return
         self.video.set_frame(image)
+        if self.config.detect_enabled and self._detection_engine is not None:
+            self._detection_engine.submit_frame(self.config.camera_id, image)
+
+    def _on_detection_result(self, result: object) -> None:
+        if (
+            self._shutting_down
+            or not isinstance(result, DetectionResult)
+            or result.camera_id != self.config.camera_id
+            or not self.config.detect_enabled
+        ):
+            return
+        detections = tuple(
+            detection
+            for detection in result.detections
+            if (
+                detection.object_class == "person"
+                and self.config.detect_persons
+            )
+            or (
+                detection.object_class == "vehicle"
+                and self.config.detect_vehicles
+            )
+        )
+        self.video.set_detections(detections)
 
     def _on_state_changed(self, state: str, detail: str, generation: int) -> None:
         if generation != self._generation or self._shutting_down:
@@ -1048,6 +1106,9 @@ class CameraTile(QWidget):
         self._highlight_animation.stop()
         self._status_animation.stop()
         self._cleanup_timer.stop()
+        self.video.clear_detections()
+        if self._detection_engine is not None:
+            self._detection_engine.remove_camera(self.config.camera_id)
         if self._interaction is not None:
             self._interaction = None
             self.releaseMouse()

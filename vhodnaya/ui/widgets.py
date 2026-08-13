@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+import time
 from datetime import datetime
+from typing import Sequence
 
 from PIL import Image
 from PySide6.QtCore import (
@@ -21,6 +23,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetricsF,
     QImage,
     QKeyEvent,
     QLinearGradient,
@@ -44,6 +47,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..constants import DETECTION_RESULT_TTL_SECONDS
+from ..detection import Detection
 from ..resources import resource_path
 from .theme import (
     BACKGROUND,
@@ -1026,6 +1031,60 @@ class StatusPill(QWidget):
         )
 
 
+def frame_target_rect(
+    canvas_width: float,
+    canvas_height: float,
+    frame_width: int,
+    frame_height: int,
+) -> QRectF:
+    """Возвращает фактически нарисованную область кадра с letterbox."""
+
+    if min(canvas_width, canvas_height, frame_width, frame_height) <= 0:
+        return QRectF()
+    scale = min(canvas_width / frame_width, canvas_height / frame_height)
+    target_width = frame_width * scale
+    target_height = frame_height * scale
+    return QRectF(
+        (canvas_width - target_width) / 2.0,
+        (canvas_height - target_height) / 2.0,
+        target_width,
+        target_height,
+    )
+
+
+def normalized_bbox_to_widget_rect(
+    bbox: Sequence[float],
+    canvas_width: float,
+    canvas_height: float,
+    frame_width: int,
+    frame_height: int,
+) -> QRectF:
+    """Переводит xyxy 0..1 в координаты кадра, а не всего виджета."""
+
+    if len(bbox) != 4:
+        return QRectF()
+    target = frame_target_rect(
+        canvas_width,
+        canvas_height,
+        frame_width,
+        frame_height,
+    )
+    if target.isEmpty():
+        return QRectF()
+    x1 = min(1.0, max(0.0, float(bbox[0])))
+    y1 = min(1.0, max(0.0, float(bbox[1])))
+    x2 = min(1.0, max(0.0, float(bbox[2])))
+    y2 = min(1.0, max(0.0, float(bbox[3])))
+    if x2 <= x1 or y2 <= y1:
+        return QRectF()
+    return QRectF(
+        target.left() + x1 * target.width(),
+        target.top() + y1 * target.height(),
+        (x2 - x1) * target.width(),
+        (y2 - y1) * target.height(),
+    )
+
+
 class VideoCanvas(QWidget):
     double_clicked = Signal()
 
@@ -1040,6 +1099,12 @@ class VideoCanvas(QWidget):
         self._state = "connecting"
         self._detail = "Подключение к камере…"
         self._corner_radius = 4.0
+        self._detections: tuple[Detection, ...] = ()
+        self._detections_updated_at = 0.0
+
+        self._detection_expiry_timer = QTimer(self)
+        self._detection_expiry_timer.setSingleShot(True)
+        self._detection_expiry_timer.timeout.connect(self._expire_detections)
 
         self._frame_animation = QVariantAnimation(self)
         self._frame_animation.setDuration(360)
@@ -1087,6 +1152,33 @@ class VideoCanvas(QWidget):
     def set_corner_radius(self, radius: float) -> None:
         self._corner_radius = max(0.0, radius)
         self.update()
+
+    def set_detections(self, detections: Sequence[Detection]) -> None:
+        """Полностью заменяет рамки; пустой результат очищает их сразу."""
+
+        self._detections = tuple(detections)
+        self._detections_updated_at = time.monotonic()
+        self._detection_expiry_timer.stop()
+        if self._detections:
+            self._detection_expiry_timer.start(
+                max(1, round(DETECTION_RESULT_TTL_SECONDS * 1000))
+            )
+        self.update()
+
+    def clear_detections(self) -> None:
+        self._detection_expiry_timer.stop()
+        if not self._detections:
+            return
+        self._detections = ()
+        self.update()
+
+    def _expire_detections(self) -> None:
+        elapsed = time.monotonic() - self._detections_updated_at
+        remaining = DETECTION_RESULT_TTL_SECONDS - elapsed
+        if remaining > 0.001:
+            self._detection_expiry_timer.start(max(1, round(remaining * 1000)))
+            return
+        self.clear_detections()
 
     def _set_frame_opacity(self, value: object) -> None:
         self._frame_opacity = float(value)
@@ -1146,19 +1238,79 @@ class VideoCanvas(QWidget):
         source_height = image.height()
         if source_width <= 0 or source_height <= 0:
             return
-        scale = min(self.width() / source_width, self.height() / source_height)
-        target_width = source_width * scale
-        target_height = source_height * scale
-        target = QRectF(
-            (self.width() - target_width) / 2,
-            (self.height() - target_height) / 2,
-            target_width,
-            target_height,
+        target = frame_target_rect(
+            self.width(),
+            self.height(),
+            source_width,
+            source_height,
         )
         painter.save()
         painter.setOpacity(self._frame_opacity)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawImage(target, image)
+        painter.restore()
+
+    def _draw_detections(self, painter: QPainter) -> None:
+        if self._frame is None or not self._detections:
+            return
+        frame_width = self._frame.width()
+        frame_height = self._frame.height()
+        target = frame_target_rect(
+            self.width(),
+            self.height(),
+            frame_width,
+            frame_height,
+        )
+        if target.isEmpty():
+            return
+
+        draw_labels = self.width() >= 230
+        label_font = QFont(self.font())
+        label_font.setPixelSize(10)
+        label_font.setWeight(QFont.Weight.DemiBold)
+        metrics = QFontMetricsF(label_font)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for detection in self._detections:
+            rect = normalized_bbox_to_widget_rect(
+                detection.bbox,
+                self.width(),
+                self.height(),
+                frame_width,
+                frame_height,
+            )
+            if rect.isEmpty():
+                continue
+            color = _color(WARNING if detection.object_class == "person" else BRONZE)
+            pen = QPen(color, 1.4)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(rect)
+
+            if not draw_labels:
+                continue
+            label = "Человек" if detection.object_class == "person" else "Машина"
+            label_width = min(target.width(), metrics.horizontalAdvance(label) + 10.0)
+            label_height = min(target.height(), max(15.0, metrics.height() + 4.0))
+            label_left = min(
+                max(target.left(), rect.left()),
+                max(target.left(), target.right() - label_width),
+            )
+            label_top = min(
+                max(target.top(), rect.top()),
+                max(target.top(), target.bottom() - label_height),
+            )
+            label_rect = QRectF(label_left, label_top, label_width, label_height)
+            painter.fillRect(label_rect, _color(BACKGROUND, 226))
+            painter.setFont(label_font)
+            painter.setPen(color)
+            painter.drawText(
+                label_rect.adjusted(5, 0, -3, 0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                label,
+            )
         painter.restore()
 
     def _draw_status_overlay(self, painter: QPainter) -> None:
@@ -1275,6 +1427,7 @@ class VideoCanvas(QWidget):
             painter.setClipPath(clip)
         self._draw_background(painter)
         self._draw_frame(painter)
+        self._draw_detections(painter)
         self._draw_status_overlay(painter)
 
 
