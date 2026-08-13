@@ -36,6 +36,7 @@ from .widgets import (
     HeaderActionButton,
     LogoGlyph,
     SegmentedControl,
+    ShuherButton,
     ToolIconButton,
     _mascot_pixmap,
     draw_grain,
@@ -69,6 +70,7 @@ class _TitleBarCenterBlock(QWidget):
 class BoardTitleBar(QWidget):
     add_camera_clicked = Signal()
     find_cameras_clicked = Signal()
+    shuher_clicked = Signal()
     camera_list_clicked = Signal()
     settings_clicked = Signal()
     fullscreen_clicked = Signal()
@@ -127,7 +129,18 @@ class BoardTitleBar(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
 
-        self.center_block = _TitleBarCenterBlock(self)
+        self._layout_cluster = QWidget(self)
+        cluster = QHBoxLayout(self._layout_cluster)
+        cluster.setContentsMargins(0, 0, 0, 0)
+        cluster.setSpacing(9)
+
+        self.shuher_button = ShuherButton(self._layout_cluster)
+        self.shuher_button.setObjectName("shuherButton")
+        self.shuher_button.setToolTip("Открыть журнал сработок")
+        self.shuher_button.clicked.connect(self.shuher_clicked)
+        cluster.addWidget(self.shuher_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.center_block = _TitleBarCenterBlock(self._layout_cluster)
         center = QVBoxLayout(self.center_block)
         center.setContentsMargins(0, 3, 0, 3)
         center.setSpacing(1)
@@ -148,8 +161,9 @@ class BoardTitleBar(QWidget):
         self.layout_control.value_changed.connect(self.layout_mode_changed)
         center.addWidget(self.layout_control, 0, Qt.AlignmentFlag.AlignHCenter)
         self.center_block.setFixedWidth(self.layout_control.sizeHint().width())
+        cluster.addWidget(self.center_block, 0, Qt.AlignmentFlag.AlignVCenter)
         self._layout.addWidget(
-            self.center_block,
+            self._layout_cluster,
             0,
             1,
             Qt.AlignmentFlag.AlignCenter,
@@ -269,7 +283,11 @@ class BoardTitleBar(QWidget):
             self.close_button,
         ):
             button.setFixedSize(tool_size, tool_size)
-        for button in (self.camera_list_button, self.find_button, self.add_button):
+        for button in (
+            self.camera_list_button,
+            self.find_button,
+            self.add_button,
+        ):
             button.set_compact(compact)
         self._sync_action_buttons()
         self._sync_side_columns()
@@ -313,6 +331,22 @@ class BoardTitleBar(QWidget):
         self.find_button.setEnabled(not busy)
         self._sync_action_buttons()
 
+    def set_shuher_unread_count(self, count: int) -> None:
+        count = max(0, int(count))
+        self.shuher_button.setText(
+            "ШУХЕР" if count == 0 else f"ШУХЕР · {count}"
+        )
+        self.shuher_button.setToolTip(
+            "Открыть журнал сработок"
+            if count == 0
+            else f"Открыть журнал: новых событий — {count}"
+        )
+        self.shuher_button.set_alert_active(count > 0)
+        self.shuher_button.updateGeometry()
+        self._layout_cluster.updateGeometry()
+        self._layout.invalidate()
+        self._sync_side_columns()
+
     def _sync_action_buttons(self) -> None:
         if self._discovery_busy:
             self.find_button.setText("Ищем…")
@@ -325,8 +359,10 @@ class BoardTitleBar(QWidget):
     def _sync_side_columns(self) -> None:
         self._left_group.ensurePolished()
         self._right_group.ensurePolished()
+        self._layout_cluster.ensurePolished()
         self._left_group.layout().activate()
         self._right_group.layout().activate()
+        self._layout_cluster.layout().activate()
         side_width = max(
             self._left_group.sizeHint().width(),
             self._right_group.sizeHint().width(),

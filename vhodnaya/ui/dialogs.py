@@ -957,10 +957,19 @@ class BoardSettingsDialog(FramelessDialog):
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
-        self.autostart_check = QCheckBox("Запускать при старте Windows", content)
+        # Автозапуск оформлен такой же строкой, как ночник: галочки настроек
+        # стоят на одной вертикали (правка владелицы).
+        autostart_row = QFrame(content)
+        autostart_row.setObjectName("settingsRow")
+        autostart_layout = QHBoxLayout(autostart_row)
+        autostart_layout.setContentsMargins(14, 9, 12, 9)
+        autostart_layout.setSpacing(9)
+        self.autostart_check = QCheckBox("Запускать при старте Windows", autostart_row)
         self.autostart_check.setChecked(autostart)
+        autostart_layout.addWidget(self.autostart_check)
+        autostart_layout.addStretch(1)
         layout.addSpacing(12)
-        layout.addWidget(self.autostart_check)
+        layout.addWidget(autostart_row)
 
         night_row = QFrame(content)
         night_row.setObjectName("settingsRow")

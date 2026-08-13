@@ -43,6 +43,8 @@ from ..autostart import AutostartError, set_autostart
 from ..audio import AudioController
 from ..config import AppConfig, CameraConfig, ConfigError, ConfigStore
 from ..constants import APP_NAME
+from ..detection import DetectionResult
+from ..events import EventJournal
 from ..onvif import DiscoveredCamera, discover_cameras, resolve_onvif_camera
 from ..resources import application_icon
 from .camera_board import BoardTitleBar, CameraBoard
@@ -54,6 +56,7 @@ from .dialogs import (
     SettingsDialog,
 )
 from .night_mode import NightModeController
+from .shuher import ShuherDialog
 from .widgets import GrainFrame
 
 
@@ -100,6 +103,7 @@ class _OnvifTask:
 class MainWindow(QWidget):
     RESIZE_MARGIN = 11
     WINDOW_MARGIN = 18
+    TITLE_BAR_COMPACT_WIDTH = 1240
     FULLSCREEN_PANEL_HEIGHT = 62
     # Панель всплывает только от самой кромки экрана: полоса во всю высоту
     # панели накрывала бы шапки верхних плиток и развёрнутой камеры.
@@ -114,10 +118,13 @@ class MainWindow(QWidget):
         config: AppConfig,
         *,
         load_error: str = "",
+        event_journal: EventJournal | None = None,
     ) -> None:
         super().__init__()
         self.store = store
         self.config = config
+        self.event_journal = event_journal or EventJournal()
+        self.event_journal.wait_until_ready()
         self._shutting_down = False
         self._config_dirty = False
         self._was_maximized_before_fullscreen = False
@@ -127,6 +134,8 @@ class MainWindow(QWidget):
         self._onvif_success_callback: Callable[[object], None] | None = None
         self._onvif_failure_callback: Callable[[], None] | None = None
         self._camera_list_dialog: CameraListDialog | None = None
+        self._shuher_dialog: ShuherDialog | None = None
+        self._shuher_unread_count = 0
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(application_icon())
@@ -170,7 +179,7 @@ class MainWindow(QWidget):
             layout_mode=config.layout_mode,
         )
         self.surface_layout.addWidget(self.board, 1)
-        self.title_bar.set_compact(self.width() < 1080)
+        self.title_bar.set_compact(self.width() < self.TITLE_BAR_COMPACT_WIDTH)
         self.night_mode_controller = NightModeController(config, self)
         self._night_overlay = self.night_mode_controller.register_window(
             self,
@@ -211,6 +220,7 @@ class MainWindow(QWidget):
 
         self.title_bar.add_camera_clicked.connect(self.add_camera)
         self.title_bar.find_cameras_clicked.connect(self.find_cameras)
+        self.title_bar.shuher_clicked.connect(self.open_shuher)
         self.title_bar.camera_list_clicked.connect(self.open_camera_list)
         self.title_bar.settings_clicked.connect(self.open_board_settings)
         self.title_bar.layout_mode_changed.connect(self._layout_mode_changed)
@@ -228,6 +238,12 @@ class MainWindow(QWidget):
         self.board.audio_reconnect_requested.connect(
             self.audio_controller.restart_camera
         )
+        self.board.detection_engine.signals.result_ready.connect(
+            self._record_detection_event
+        )
+        self.event_journal.signals.unread_changed.connect(
+            self._set_shuher_unread_count
+        )
         self.audio_controller.track_missing.connect(self._audio_track_missing)
         self.audio_controller.state_changed.connect(
             self.board.set_audio_runtime_state
@@ -236,6 +252,7 @@ class MainWindow(QWidget):
             self.board.set_audio_backend_available
         )
         self._sync_camera_summary()
+        self._set_shuher_unread_count(self.event_journal.unread_count())
 
         self.fullscreen_shortcut = QShortcut(QKeySequence("F11"), self)
         self.fullscreen_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -250,7 +267,6 @@ class MainWindow(QWidget):
         self._save_timer.timeout.connect(self._persist_current_config)
 
         self.audio_controller.sync_config(self.config)
-
         for widget in (self, *self.findChildren(QWidget)):
             widget.setMouseTracking(True)
         if load_error:
@@ -372,6 +388,43 @@ class MainWindow(QWidget):
             ),
             None,
         )
+
+    def _record_detection_event(self, payload: object) -> None:
+        if self._shutting_down or not isinstance(payload, DetectionResult):
+            return
+        camera = self._camera_config(payload.camera_id)
+        if camera is None or not camera.on_board or not camera.detect_enabled:
+            return
+        self.event_journal.ingest(payload, camera.camera_name)
+
+    def _set_shuher_unread_count(self, count: int) -> None:
+        self._shuher_unread_count = max(0, int(count))
+        self.title_bar.set_shuher_unread_count(self._shuher_unread_count)
+
+    def open_shuher(self) -> None:
+        if self._shuher_dialog is not None:
+            self._shuher_dialog.raise_()
+            self._shuher_dialog.activateWindow()
+            return
+
+        # Все текущие записи считаются увиденными сразу при открытии.
+        current_ids = tuple(event.id for event in self.event_journal.records())
+        self.title_bar.set_shuher_unread_count(0)
+        if current_ids:
+            self.event_journal.mark_viewed(current_ids, wait=True, timeout=0.75)
+        dialog = ShuherDialog(self.event_journal, self)
+        self._shuher_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            if self._shuher_dialog is dialog:
+                self._shuher_dialog = None
+            # Новые события, пришедшие во время открытого exec-цикла, до
+            # закрытия сохраняют пилюлю «новое», затем помечаются просмотренными.
+            if self.event_journal.unread_count():
+                self.event_journal.mark_viewed(None, wait=True, timeout=0.75)
+            self._set_shuher_unread_count(self.event_journal.unread_count())
+            dialog.deleteLater()
 
     def _toggle_camera_audio(self, camera_id: str) -> bool:
         snapshot = self._snapshot_config()
@@ -797,6 +850,7 @@ class MainWindow(QWidget):
             self.board.add_camera(applied, index=visible_index)
         else:
             self.board.remove_camera(camera_id)
+            self.event_journal.reset_camera(camera_id)
         self._raise_night_overlay()
         self._sync_camera_summary()
         self._refresh_camera_list()
@@ -828,6 +882,7 @@ class MainWindow(QWidget):
                 candidate = snapshot.updated(cameras=remaining)
                 if self._persist_candidate(candidate):
                     self.board.remove_camera(camera_id)
+                    self.event_journal.reset_camera(camera_id)
                     self._sync_camera_summary()
                 return
 
@@ -850,6 +905,8 @@ class MainWindow(QWidget):
             )
             if self.board.tile_for(camera_id) is not None:
                 self.board.replace_camera_config(applied_camera)
+            if current.detect_enabled and not applied_camera.detect_enabled:
+                self.event_journal.reset_camera(camera_id)
             if needs_onvif_refresh:
                 self._refresh_onvif_camera(applied_camera)
         finally:
@@ -1194,7 +1251,9 @@ class MainWindow(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if hasattr(self, "title_bar"):
-            self.title_bar.set_compact(self.width() < 1080)
+            self.title_bar.set_compact(
+                self.width() < self.TITLE_BAR_COMPACT_WIDTH
+            )
         if getattr(self, "_title_bar_overlay", False):
             self._position_fullscreen_title_bar()
         self._raise_night_overlay()
@@ -1279,6 +1338,7 @@ class MainWindow(QWidget):
         self._shutting_down = True
         self.audio_controller.shutdown()
         self.board.shutdown()
+        self.event_journal.shutdown()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.shutdown()

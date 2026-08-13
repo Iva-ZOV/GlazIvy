@@ -218,6 +218,7 @@ _grain_source: QPixmap | None = None
 _grain_cache: dict[int, QPixmap] = {}
 _mascot_sources: dict[str, Image.Image | None] = {}
 _mascot_cache: dict[tuple[str, int, int, int], QPixmap] = {}
+_shuher_icon_cache: tuple[QPixmap | None, tuple[QPixmap, ...]] | None = None
 _MASCOT_FILES = {
     "calm": "mascot_calm.png",
     "list": "mascot_list.png",
@@ -227,6 +228,7 @@ _MASCOT_FILES = {
     "scan_2": "mascot_scan_2.png",
     "scan_3": "mascot_scan_3.png",
     "scan_4": "mascot_scan_4.png",
+    "watch": "mascot_watch.png",
     "wrench": "mascot_wrench.png",
 }
 
@@ -323,6 +325,39 @@ def _mascot_pixmap(kind: str, max_size: QSize, dpr: float) -> QPixmap | None:
     pixmap.setDevicePixelRatio(dpr)
     _mascot_cache[key] = pixmap
     return pixmap
+
+
+def _shuher_icon_frames() -> tuple[QPixmap | None, tuple[QPixmap, ...]]:
+    """Загружает подготовленные @2x-иконки кнопки только из PNG-байтов."""
+
+    global _shuher_icon_cache
+    if _shuher_icon_cache is not None:
+        return _shuher_icon_cache
+
+    def load(name: str) -> QPixmap | None:
+        pixmap = QPixmap()
+        try:
+            loaded = pixmap.loadFromData(
+                resource_path("assets", name).read_bytes(),
+                "PNG",
+            )
+        except OSError:
+            loaded = False
+        if not loaded or pixmap.isNull():
+            return None
+        pixmap.setDevicePixelRatio(2.0)
+        return pixmap
+
+    calm = load("shuher_watch.png")
+    alert = tuple(
+        pixmap
+        for index in range(1, 5)
+        if (pixmap := load(f"alert_{index}.png")) is not None
+    )
+    if len(alert) != 4:
+        alert = ()
+    _shuher_icon_cache = calm, alert
+    return _shuher_icon_cache
 
 
 def _grain_pixmap(dpr: float) -> QPixmap | None:
@@ -647,10 +682,10 @@ class HeaderActionButton(QAbstractButton):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        if kind not in {"search", "add", "list"}:
+        if kind not in {"search", "add", "list", "shuher"}:
             raise ValueError("Неизвестная иконка кнопки панели")
-        if outer_side not in {"left", "right", "both"}:
-            raise ValueError("outer_side должен быть left, right или both")
+        if outer_side not in {"left", "middle", "right", "both"}:
+            raise ValueError("outer_side должен быть left, middle, right или both")
         self.kind = kind
         self.primary = primary
         self.outer_side = outer_side
@@ -671,7 +706,23 @@ class HeaderActionButton(QAbstractButton):
     def sizeHint(self) -> QSize:
         if self._compact:
             return QSize(42, 36)
-        return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 53, 36)
+        return QSize(
+            self.fontMetrics().horizontalAdvance(self.text())
+            + self._content_icon_size().width()
+            + 35,
+            36,
+        )
+
+    def _content_icon_size(self) -> QSize:
+        return QSize(18, 18)
+
+    def _draw_content_icon(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        color: QColor,
+    ) -> None:
+        _draw_header_action_icon(painter, self.kind, rect, color)
 
     def set_compact(self, compact: bool) -> None:
         if compact == self._compact:
@@ -743,22 +794,28 @@ class HeaderActionButton(QAbstractButton):
         font.setWeight(QFont.Weight.Bold if self.primary else QFont.Weight.DemiBold)
         font.setCapitalization(QFont.Capitalization.AllUppercase)
         painter.setFont(font)
+        icon_size = self._content_icon_size()
         if self._compact:
             icon_rect = QRectF(
-                (self.width() - 18) / 2,
-                (self.height() - 18) / 2,
-                18,
-                18,
+                (self.width() - icon_size.width()) / 2,
+                (self.height() - icon_size.height()) / 2,
+                icon_size.width(),
+                icon_size.height(),
             )
         else:
             text_width = painter.fontMetrics().horizontalAdvance(self.text())
-            content_width = 18 + 8 + text_width
+            content_width = icon_size.width() + 8 + text_width
             content_left = (self.width() - content_width) / 2
-            icon_rect = QRectF(content_left, (self.height() - 18) / 2, 18, 18)
+            icon_rect = QRectF(
+                content_left,
+                (self.height() - icon_size.height()) / 2,
+                icon_size.width(),
+                icon_size.height(),
+            )
             painter.setPen(glyph)
             painter.drawText(
                 QRectF(
-                    content_left + 26,
+                    content_left + icon_size.width() + 8,
                     0,
                     text_width + 2,
                     self.height(),
@@ -766,7 +823,7 @@ class HeaderActionButton(QAbstractButton):
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 self.text(),
             )
-        _draw_header_action_icon(painter, self.kind, icon_rect, glyph)
+        self._draw_content_icon(painter, icon_rect, glyph)
 
         if self.hasFocus():
             painter.setPen(QPen(_color(KHAKI, 220), 1))
@@ -779,6 +836,82 @@ class HeaderActionButton(QAbstractButton):
                     round_right=self.outer_side in {"right", "both"},
                 )
             )
+
+
+class ShuherButton(HeaderActionButton):
+    """Кнопка журнала со спокойным котом и пинг-понг тревогой."""
+
+    FRAME_INTERVAL_MS = 425
+    SEQUENCE = (0, 1, 2, 3, 2, 1)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(
+            "ШУХЕР",
+            "shuher",
+            primary=False,
+            outer_side="both",
+            parent=parent,
+        )
+        self._calm_frame, self._alert_frames = _shuher_icon_frames()
+        self._alert_active = False
+        self._sequence_position = 0
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setInterval(self.FRAME_INTERVAL_MS)
+        self._frame_timer.timeout.connect(self._advance_frame)
+
+    @property
+    def alert_active(self) -> bool:
+        return self._alert_active
+
+    @property
+    def current_frame(self) -> int:
+        return self.SEQUENCE[self._sequence_position]
+
+    def set_alert_active(self, active: bool) -> None:
+        active = bool(active and self._alert_frames)
+        if active == self._alert_active:
+            return
+        self._alert_active = active
+        self._sequence_position = 0
+        if active:
+            self._frame_timer.start()
+        else:
+            self._frame_timer.stop()
+        self.update()
+
+    def set_preview_frame(self, frame_index: int) -> None:
+        """Фиксирует кадр для offscreen-проверки целевого размера."""
+
+        if not 0 <= frame_index < len(self._alert_frames):
+            return
+        self._sequence_position = self.SEQUENCE.index(frame_index)
+        self.update()
+
+    def _advance_frame(self) -> None:
+        self._sequence_position = (self._sequence_position + 1) % len(self.SEQUENCE)
+        self.update()
+
+    def _content_icon_size(self) -> QSize:
+        return QSize(36, 36)
+
+    def _draw_content_icon(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        color: QColor,
+    ) -> None:
+        del color
+        pixmap = self._calm_frame
+        if self._alert_active and self._alert_frames:
+            pixmap = self._alert_frames[self.current_frame]
+        if pixmap is None or pixmap.isNull():
+            return
+        painter.save()
+        if not self.isEnabled():
+            painter.setOpacity(0.42)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        painter.drawPixmap(rect.topLeft(), pixmap)
+        painter.restore()
 
 
 class SegmentedControl(QWidget):
