@@ -37,6 +37,7 @@ $python = Join-Path $root ".venv\Scripts\python.exe"
 $archive = "C:\ivasProjects\Глаз Ивы\GlazIvy-releases"
 $zipName = "GlazIvy-portable-$Version-win64.zip"
 $zipPath = Join-Path $root "release\$zipName"
+$buildInfoPath = Join-Path $root "release\build-info-$Version.json"
 $parts = $Version.Split('.')
 
 function Write-Step([string]$text) {
@@ -51,6 +52,26 @@ function Test-HasBom([string]$path) {
     $stream = [System.IO.File]::OpenRead($path)
     try { $read = $stream.Read($head, 0, 3) } finally { $stream.Dispose() }
     return ($read -eq 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF)
+}
+
+# Отпечаток ИМЕННО кода приложения (не инструментов вроде release.ps1):
+# по нему публикация понимает, из того ли дерева собран лежащий zip.
+function Get-AppFingerprint() {
+    $paths = @(
+        "vhodnaya", "packaging", "assets", "scripts",
+        "main.py", "GlazIvy.spec", "requirements.txt"
+    )
+    $tracked = git ls-tree -r HEAD -- $paths
+    $uncommitted = git diff HEAD -- $paths
+    $material = ($tracked -join "`n") + "`n---`n" + ($uncommitted -join "`n")
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($material)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLower()
+    }
+    finally {
+        $sha.Dispose()
+    }
 }
 
 function Update-File([string]$path, [string]$pattern, [string]$replacement) {
@@ -141,6 +162,13 @@ try {
         New-Item -ItemType Directory -Path (Join-Path $root "release") -Force | Out-Null
         if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $zipPath -CompressionLevel Optimal
+
+        # Запоминаем, ИЗ ЧЕГО собран этот zip: при публикации сверим.
+        @{
+            version = $Version
+            head = (git rev-parse HEAD)
+            app = (Get-AppFingerprint)
+        } | ConvertTo-Json | Set-Content -LiteralPath $buildInfoPath -Encoding UTF8
     }
 
     $localSize = 0
@@ -151,6 +179,26 @@ try {
         Write-Host "    zip не собран (SkipBuild) — проверялась только подстановка версий"
     } else {
         throw "Нет архива сборки: $zipPath"
+    }
+
+    # --- 2а. Zip обязан быть собран из ТЕКУЩЕГО кода приложения ---
+    # Иначе с -SkipBuild можно опубликовать вчерашнюю сборку под сегодняшним
+    # тегом, и никто этого не заметит.
+    if (-not $DryRun) {
+        if (-not (Test-Path -LiteralPath $buildInfoPath)) {
+            throw "Нет $([System.IO.Path]::GetFileName($buildInfoPath)) — zip собран неизвестно из чего. Пересобери без -SkipBuild."
+        }
+        $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $currentApp = Get-AppFingerprint
+        if ($buildInfo.app -ne $currentApp) {
+            throw @"
+Код приложения изменился после сборки zip — публиковать его нельзя.
+Собран из: $($buildInfo.head) ($($buildInfo.app.Substring(0,12))…)
+Сейчас:    $(git rev-parse HEAD) ($($currentApp.Substring(0,12))…)
+Пересобери релиз без -SkipBuild.
+"@
+        }
+        Write-Host "    сборка соответствует текущему коду приложения"
     }
 
     if ($DryRun) {
