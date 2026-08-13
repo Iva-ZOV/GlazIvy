@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSizePolicy,
     QSlider,
     QSpinBox,
@@ -19,11 +20,12 @@ from PySide6.QtWidgets import (
 from ..config import (
     CameraConfig,
     ConfigError,
+    DetectZone,
     extract_stream_credentials,
     replace_stream_credentials,
 )
 from ..detection import detection_model_path
-from .widgets import SegmentedControl
+from .widgets import SegmentedControl, set_action_button_capitalization
 
 
 class FieldBlock(QWidget):
@@ -49,6 +51,7 @@ class CameraForm(QWidget):
     def __init__(self, config: CameraConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._base_config = config
+        self._detect_zone = config.detect_zone
         is_onvif = config.source == "onvif"
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
@@ -251,6 +254,19 @@ class CameraForm(QWidget):
         slider_row.addWidget(self.detect_sensitivity_slider)
         root.addLayout(slider_row)
 
+        zone_row = QHBoxLayout()
+        zone_row.setContentsMargins(22, 0, 0, 0)
+        zone_row.setSpacing(12)
+        self.detect_zone_button = QPushButton("Зона распознавания…", self)
+        self.detect_zone_button.setObjectName("secondaryButton")
+        set_action_button_capitalization(self.detect_zone_button)
+        self.detect_zone_summary = QLabel(self)
+        self.detect_zone_summary.setObjectName("helperText")
+        zone_row.addWidget(self.detect_zone_button)
+        zone_row.addWidget(self.detect_zone_summary, 1)
+        root.addLayout(zone_row)
+        self._sync_detect_zone_summary()
+
         self.detection_model_error = QLabel(
             "Модель не найдена — запустите scripts\\fetch_model.py",
             self,
@@ -284,6 +300,8 @@ class CameraForm(QWidget):
             self.detect_vehicles_check,
             self.detect_sensitivity_slider,
             self.sensitivity_value,
+            self.detect_zone_button,
+            self.detect_zone_summary,
         ):
             widget.setEnabled(enabled)
         self.detection_model_error.setVisible(
@@ -320,6 +338,7 @@ class CameraForm(QWidget):
             detect_persons=self.detect_persons_check.isChecked(),
             detect_vehicles=self.detect_vehicles_check.isChecked(),
             detect_sensitivity=self.detect_sensitivity_slider.value(),
+            detect_zone=self._detect_zone,
         )
         if self._base_config.source == "onvif":
             username = self.username_edit.text()
@@ -382,6 +401,22 @@ class CameraForm(QWidget):
 
         self.error_label.hide()
         return config
+
+    def detect_zone(self) -> DetectZone | None:
+        return self._detect_zone
+
+    def set_detect_zone(self, zone: DetectZone | None) -> None:
+        """Меняет только черновик формы; запись выполняет внешний диалог."""
+
+        self._detect_zone = zone
+        self._sync_detect_zone_summary()
+
+    def _sync_detect_zone_summary(self) -> None:
+        self.detect_zone_summary.setText(
+            "Вся площадь кадра"
+            if self._detect_zone is None
+            else "Задана ограниченная область"
+        )
 
     def show_error(self, message: str) -> None:
         self.error_label.setText(message)

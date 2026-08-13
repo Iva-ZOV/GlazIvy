@@ -807,7 +807,13 @@ class MainWindow(QWidget):
         if current is None:
             self._refresh_camera_list()
             return
-        dialog = SettingsDialog(current, self._camera_list_dialog or self)
+        tile = self.board.tile_for(camera_id)
+        frame_provider = tile.current_frame if tile is not None else None
+        dialog = SettingsDialog(
+            current,
+            self._camera_list_dialog or self,
+            frame_provider=frame_provider,
+        )
         try:
             if dialog.exec() != SettingsDialog.DialogCode.Accepted:
                 return

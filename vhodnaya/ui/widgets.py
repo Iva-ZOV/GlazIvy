@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..config import DetectZone
 from ..constants import DETECTION_RESULT_TTL_SECONDS
 from ..detection import Detection
 from ..resources import resource_path
@@ -1093,7 +1094,7 @@ class VideoCanvas(QWidget):
         self.setMinimumSize(480, 360)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        self._frame = None
+        self._frame: QImage | None = None
         self._frame_opacity = 0.0
         self._overlay_opacity = 1.0
         self._state = "connecting"
@@ -1101,6 +1102,8 @@ class VideoCanvas(QWidget):
         self._corner_radius = 4.0
         self._detections: tuple[Detection, ...] = ()
         self._detections_updated_at = 0.0
+        self._detection_zone: DetectZone | None = None
+        self._detection_zone_visible = False
 
         self._detection_expiry_timer = QTimer(self)
         self._detection_expiry_timer.setSingleShot(True)
@@ -1127,7 +1130,14 @@ class VideoCanvas(QWidget):
             return None
         return float(width) / float(height)
 
-    def set_frame(self, image: object) -> None:
+    def current_frame(self) -> QImage | None:
+        """Возвращает независимый snapshot последнего удержанного кадра."""
+
+        if self._frame is None or self._frame.isNull():
+            return None
+        return QImage(self._frame)
+
+    def set_frame(self, image: QImage) -> None:
         first_frame = self._frame is None
         self._frame = image
         if first_frame:
@@ -1137,6 +1147,16 @@ class VideoCanvas(QWidget):
             self._frame_animation.start()
         else:
             self._frame_opacity = 1.0
+        self.update()
+
+    def set_detection_zone(
+        self,
+        zone: DetectZone | None,
+        *,
+        visible: bool,
+    ) -> None:
+        self._detection_zone = zone
+        self._detection_zone_visible = bool(visible and zone is not None)
         self.update()
 
     def set_stream_state(self, state: str, detail: str) -> None:
@@ -1313,6 +1333,33 @@ class VideoCanvas(QWidget):
             )
         painter.restore()
 
+    def _draw_detection_zone(self, painter: QPainter) -> None:
+        if (
+            self._frame is None
+            or self._detection_zone is None
+            or not self._detection_zone_visible
+        ):
+            return
+        rect = normalized_bbox_to_widget_rect(
+            self._detection_zone,
+            self.width(),
+            self.height(),
+            self._frame.width(),
+            self._frame.height(),
+        )
+        if rect.isEmpty():
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(_color(BRONZE), 1.0)
+        pen.setCosmetic(True)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setDashPattern([5.0, 4.0])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(rect)
+        painter.restore()
+
     def _draw_status_overlay(self, painter: QPainter) -> None:
         if self._overlay_opacity <= 0.01:
             return
@@ -1429,6 +1476,7 @@ class VideoCanvas(QWidget):
         self._draw_frame(painter)
         self._draw_detections(painter)
         self._draw_status_overlay(painter)
+        self._draw_detection_zone(painter)
 
 
 class TitleBar(QWidget):

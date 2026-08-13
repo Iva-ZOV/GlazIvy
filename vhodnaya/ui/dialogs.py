@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import QPoint, QSize, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
+    QImage,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -28,10 +31,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import CameraConfig, DEFAULT_NIGHT_END, DEFAULT_NIGHT_START
+from ..config import CameraConfig, DEFAULT_NIGHT_END, DEFAULT_NIGHT_START, DetectZone
 from ..onvif import DiscoveredCamera
 from ..resources import application_icon
 from .forms import CameraForm
+from .detection_zone import DetectionZoneCanvas
 from .night_mode import NightModeController, controller_from_parent
 from .theme import BRONZE, SUCCESS, TEXT_MUTED, WARNING
 from .widgets import (
@@ -156,6 +160,84 @@ class FramelessDialog(QDialog):
         if self.night_mode_controller is not None:
             self.night_mode_controller.unregister_window(self)
             self._night_overlay = None
+
+
+class DetectionZoneDialog(FramelessDialog):
+    """Модальный редактор snapshot-кадра; сам конфигурацию не сохраняет."""
+
+    def __init__(
+        self,
+        zone: DetectZone | None,
+        frame: QImage | None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(
+            "ЗОНА РАСПОЗНАВАНИЯ",
+            parent,
+            preferred_width=980,
+            preferred_height=760,
+        )
+        self.result_zone: DetectZone | None = zone
+
+        content = QWidget(self.surface)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(28, 16, 28, 24)
+        content_layout.setSpacing(14)
+
+        title = QLabel("Укажите рабочую область кадра", content)
+        title.setObjectName("dialogTitle")
+        set_heading_capitalization(title)
+        content_layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Центры рамок за пределами зоны будут игнорироваться. "
+            "Тяните по пустому месту для новой зоны, внутри — для переноса, "
+            "за углы и кромки — для изменения размера.",
+            content,
+        )
+        subtitle.setObjectName("dialogSubtitle")
+        subtitle.setWordWrap(True)
+        content_layout.addWidget(subtitle)
+
+        self.canvas = DetectionZoneCanvas(frame, zone, content)
+        content_layout.addWidget(self.canvas, 1)
+
+        hint = QLabel(
+            "Зона хранится в долях кадра и не меняется при переключении SD/HD.",
+            content,
+        )
+        hint.setObjectName("helperText")
+        hint.setWordWrap(True)
+        content_layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        whole_frame = QPushButton("Вся площадь", content)
+        whole_frame.setObjectName("secondaryButton")
+        set_action_button_capitalization(whole_frame)
+        whole_frame.clicked.connect(lambda: self.canvas.set_zone(None))
+        buttons.addWidget(whole_frame)
+        buttons.addStretch(1)
+        cancel = QPushButton("Отмена", content)
+        cancel.setObjectName("secondaryButton")
+        set_action_button_capitalization(cancel)
+        cancel.clicked.connect(self.reject)
+        save = QPushButton("Сохранить", content)
+        save.setObjectName("primaryButton")
+        set_action_button_capitalization(save)
+        save.setDefault(True)
+        save.clicked.connect(self._accept_zone)
+        buttons.addWidget(cancel)
+        buttons.addWidget(save)
+        content_layout.addLayout(buttons)
+        self.surface_layout.addWidget(content, 1)
+
+    def _accept_zone(self) -> None:
+        self.result_zone = self.canvas.zone()
+        self.accept()
+
+    def done(self, result: int) -> None:
+        self.canvas.cancel_active_gesture()
+        super().done(result)
 
 
 def _dialog_mascot(
@@ -730,7 +812,13 @@ class CameraListDialog(FramelessDialog):
 class SettingsDialog(FramelessDialog):
     """Настройки выбранной камеры; удаление не требует валидной формы."""
 
-    def __init__(self, config: CameraConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: CameraConfig,
+        parent: QWidget | None = None,
+        *,
+        frame_provider: Callable[[], QImage | None] | None = None,
+    ) -> None:
         super().__init__(
             "Настройки камеры",
             parent,
@@ -739,6 +827,7 @@ class SettingsDialog(FramelessDialog):
         )
         self.result_config: CameraConfig | None = None
         self.delete_requested = False
+        self._frame_provider = frame_provider
 
         content = QWidget(self.surface)
         content_layout = QVBoxLayout(content)
@@ -774,6 +863,7 @@ class SettingsDialog(FramelessDialog):
         scroll = QScrollArea(content)
         scroll.setWidgetResizable(True)
         self.form = CameraForm(config, scroll)
+        self.form.detect_zone_button.clicked.connect(self._open_detection_zone)
         scroll.setWidget(self.form)
         content_layout.addWidget(scroll, 1)
 
@@ -808,6 +898,23 @@ class SettingsDialog(FramelessDialog):
             return
         self.result_config = config
         self.accept()
+
+    def _open_detection_zone(self) -> None:
+        frame: QImage | None = None
+        if self._frame_provider is not None:
+            try:
+                latest = self._frame_provider()
+            except RuntimeError:
+                latest = None
+            if latest is not None and not latest.isNull():
+                # Snapshot фиксируется именно при открытии редактора.
+                frame = QImage(latest)
+        dialog = DetectionZoneDialog(self.form.detect_zone(), frame, self)
+        try:
+            if dialog.exec() == DetectionZoneDialog.DialogCode.Accepted:
+                self.form.set_detect_zone(dialog.result_zone)
+        finally:
+            dialog.deleteLater()
 
 
 class BoardSettingsDialog(FramelessDialog):

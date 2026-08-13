@@ -270,6 +270,7 @@ class CameraTile(QWidget):
             config.detect_persons,
             config.detect_vehicles,
             config.detect_sensitivity,
+            config.detect_zone,
         )
 
     def _install_pointer_filters(self) -> None:
@@ -380,6 +381,7 @@ class CameraTile(QWidget):
         if visible == self._header_target_visible:
             if visible:
                 self.header.raise_()
+            self._sync_detection_zone_overlay()
             return
 
         self._header_target_visible = visible
@@ -390,6 +392,7 @@ class CameraTile(QWidget):
             self.header.setEnabled(True)
             self.header.show()
             self.header.raise_()
+            self._sync_detection_zone_overlay()
         elif self.header.isVisible():
             self.header.raise_()
 
@@ -421,10 +424,12 @@ class CameraTile(QWidget):
             self._header_effect.setOpacity(1.0)
             self.header.show()
             self.header.raise_()
+            self._sync_detection_zone_overlay()
             return
         self._header_effect.setOpacity(0.0)
         self.header.setEnabled(False)
         self.header.hide()
+        self._sync_detection_zone_overlay()
 
     def _sync_header_hover(self) -> None:
         if self._shutting_down:
@@ -878,6 +883,19 @@ class CameraTile(QWidget):
         self.name_label.setToolTip(self.config.camera_name)
         self.volume_popup.set_volume(self.config.volume)
         self._sync_audio_button()
+        self._sync_detection_zone_overlay()
+
+    def _sync_detection_zone_overlay(self) -> None:
+        header_visible = self._header_target_visible or (
+            self.header.isVisible() and self._header_effect.opacity() > 0.01
+        )
+        self.video.set_detection_zone(
+            self.config.detect_zone,
+            visible=(self.config.detect_enabled and header_visible),
+        )
+
+    def current_frame(self) -> QImage | None:
+        return self.video.current_frame()
 
     def _sync_audio_button(self) -> None:
         configured = self.config.is_configured()

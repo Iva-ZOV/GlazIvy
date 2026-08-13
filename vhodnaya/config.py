@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import math
 import os
 import re
 import shutil
@@ -32,9 +33,39 @@ DEFAULT_NIGHT_START = "22:00"
 DEFAULT_NIGHT_END = "06:00"
 _TIME_HHMM_RE = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 
+DetectZone = tuple[float, float, float, float]
+
 
 class ConfigError(ValueError):
     """Ошибка чтения или проверки конфигурации."""
+
+
+def _validate_detect_zone(value: object) -> DetectZone | None:
+    """Проверяет прямоугольную зону в долях кадра и возвращает float-кортеж."""
+
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        raise ConfigError("Зона распознавания должна содержать четыре числа.")
+
+    coordinates: list[float] = []
+    for coordinate in value:
+        if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
+            raise ConfigError("Координаты зоны распознавания должны быть числами.")
+        number = float(coordinate)
+        if not math.isfinite(number):
+            raise ConfigError("Координаты зоны распознавания должны быть конечными.")
+        if not 0.0 <= number <= 1.0:
+            raise ConfigError("Координаты зоны распознавания должны быть в диапазоне 0..1.")
+        coordinates.append(number)
+
+    x1, y1, x2, y2 = coordinates
+    if x1 >= x2 or y1 >= y2:
+        raise ConfigError(
+            "У зоны распознавания левая верхняя точка должна быть "
+            "выше и левее правой нижней."
+        )
+    return (x1, y1, x2, y2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +310,7 @@ class CameraConfig:
     detect_persons: bool = True
     detect_vehicles: bool = True
     detect_sensitivity: int = 50
+    detect_zone: DetectZone | None = None
     geometry: CameraGeometry = field(default_factory=CameraGeometry)
     source: str = "template"
     stream_url_hd: str = ""
@@ -368,6 +400,7 @@ class CameraConfig:
             raise ConfigError(
                 "Чувствительность распознавания должна быть в диапазоне от 0 до 100."
             )
+        _validate_detect_zone(self.detect_zone)
         self.geometry.validate()
 
         if self.source == "onvif":
@@ -531,6 +564,12 @@ def _read_int(payload: dict[str, Any], key: str, default: int) -> int:
         raise ConfigError(f"Поле {key} должно быть целым числом.") from exc
 
 
+def _read_detect_zone(payload: dict[str, Any]) -> DetectZone | None:
+    """Отсутствующее поле и JSON null означают всю площадь кадра."""
+
+    return _validate_detect_zone(payload.get("detect_zone"))
+
+
 def _read_night_time(payload: dict[str, Any], key: str, default: str) -> str:
     """Мягко чинит мусорную строку, но не скрывает неверный тип поля."""
 
@@ -601,6 +640,7 @@ class ConfigStore:
             detect_persons=_read_bool(payload, "detect_persons", True),
             detect_vehicles=_read_bool(payload, "detect_vehicles", True),
             detect_sensitivity=_read_int(payload, "detect_sensitivity", 50),
+            detect_zone=_read_detect_zone(payload),
             geometry=CameraGeometry(
                 x=_read_int(geometry_payload, "x", 24),
                 y=_read_int(geometry_payload, "y", 24),
@@ -693,7 +733,7 @@ class ConfigStore:
     @staticmethod
     def _camera_payload(camera: CameraConfig) -> dict[str, Any]:
         geometry = camera.geometry
-        return {
+        payload: dict[str, Any] = {
             "id": camera.camera_id,
             "camera_name": camera.camera_name,
             "host": camera.host,
@@ -726,6 +766,9 @@ class ConfigStore:
                 "z": geometry.z,
             },
         }
+        if camera.detect_zone is not None:
+            payload["detect_zone"] = [float(value) for value in camera.detect_zone]
+        return payload
 
     def save(self, config: AppConfig) -> None:
         config.validate()

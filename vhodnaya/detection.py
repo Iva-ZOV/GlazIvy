@@ -15,7 +15,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
 
-from .config import CameraConfig
+from .config import CameraConfig, DetectZone
 from .constants import (
     DETECTION_INFERENCES_PER_SECOND,
     DETECTION_MODEL_FILENAME,
@@ -41,6 +41,26 @@ class Detection:
     object_class: str
     confidence: float
     bbox: tuple[float, float, float, float]
+
+
+def filter_detections_by_zone(
+    detections: Sequence[Detection],
+    detect_zone: DetectZone | None,
+) -> tuple[Detection, ...]:
+    """Оставляет рамки, центр которых находится внутри заданной зоны."""
+
+    if detect_zone is None:
+        return tuple(detections)
+    x1, y1, x2, y2 = detect_zone
+    filtered: list[Detection] = []
+    for detection in detections:
+        box_x1, box_y1, box_x2, box_y2 = detection.bbox
+        center_x = (box_x1 + box_x2) / 2.0
+        center_y = (box_y1 + box_y2) / 2.0
+        # Центр bbox — простой и предсказуемый критерий; граница включительна.
+        if x1 <= center_x <= x2 and y1 <= center_y <= y2:
+            filtered.append(detection)
+    return tuple(filtered)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +93,7 @@ class CameraDetectionSettings:
     persons: bool
     vehicles: bool
     sensitivity: int
+    zone: DetectZone | None
 
     @classmethod
     def from_config(cls, config: CameraConfig) -> "CameraDetectionSettings":
@@ -81,6 +102,7 @@ class CameraDetectionSettings:
             persons=config.detect_persons,
             vehicles=config.detect_vehicles,
             sensitivity=config.detect_sensitivity,
+            zone=config.detect_zone,
         )
 
     @property
@@ -600,6 +622,12 @@ class DetectionEngine:
                     sensitivity=work.settings.sensitivity,
                     persons=work.settings.persons,
                     vehicles=work.settings.vehicles,
+                )
+                # Порог и NMS уже применены детектором; зону фильтруем перед
+                # эмитом, сохраняя даже полностью пустой результат.
+                detections = filter_detections_by_zone(
+                    detections,
+                    work.settings.zone,
                 )
             except Exception:
                 LOGGER.exception("Детектор YOLOX остановлен из-за ошибки ONNX Runtime.")
