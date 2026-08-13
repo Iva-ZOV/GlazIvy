@@ -15,7 +15,7 @@ $iconFile = Join-Path $projectRoot "assets\app_icon.ico"
 $specFile = Join-Path $projectRoot "GlazIvy.spec"
 $distFolder = Join-Path $projectRoot "dist\GlazIvy"
 $releaseFolder = Join-Path $projectRoot "release"
-$portableZip = Join-Path $releaseFolder "GlazIvy-portable-1.6.0-win64.zip"
+$portableZip = Join-Path $releaseFolder "GlazIvy-portable-1.7.0-win64.zip"
 
 if (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {
     throw "Python не найден: $Python"
