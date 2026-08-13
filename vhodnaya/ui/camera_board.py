@@ -21,53 +21,30 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
-    QLabel,
     QSizePolicy,
-    QVBoxLayout,
     QWidget,
 )
 
 from ..config import CameraConfig, CameraGeometry
-from ..constants import APP_NAME
 from ..detection import DetectionEngine
 from .camera_tile import CameraTile
 from .theme import BACKGROUND, BRONZE, KHAKI, TEXT, TEXT_MUTED
 from .widgets import (
     HeaderActionButton,
-    LogoGlyph,
-    SegmentedControl,
+    LayoutMenuButton,
     ShuherButton,
+    TitlebarMascotPlaque,
     ToolIconButton,
     _mascot_pixmap,
     draw_grain,
-    set_heading_capitalization,
 )
 
 
-class _TitleBarCenterBlock(QWidget):
-    """Центральный блок панели: контролы принимают клики, фон двигает окно."""
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            window = self.window()
-            handle = window.windowHandle()
-            if handle is not None and not window.isFullScreen():
-                handle.startSystemMove()
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            toggle = getattr(self.window(), "toggle_maximized", None)
-            if callable(toggle):
-                toggle()
-                event.accept()
-                return
-        super().mouseDoubleClickEvent(event)
-
-
 class BoardTitleBar(QWidget):
+    HEIGHT = 70
+    BUTTON_HEIGHT = 42
+    _MAX_WIDGET_SIZE = 16_777_215
+
     add_camera_clicked = Signal()
     find_cameras_clicked = Signal()
     shuher_clicked = Signal()
@@ -86,159 +63,144 @@ class BoardTitleBar(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("titleBar")
-        self.setFixedHeight(62)
+        self.setFixedHeight(self.HEIGHT)
         self._compact = False
         self._fullscreen = False
         self._discovery_busy = False
         self._overlay_backing = False
 
-        self._layout = QGridLayout(self)
-        self._layout.setContentsMargins(16, 0, 10, 0)
-        self._layout.setHorizontalSpacing(7)
-        self._layout.setVerticalSpacing(0)
-        self._layout.setColumnStretch(0, 1)
-        self._layout.setColumnStretch(1, 0)
-        self._layout.setColumnStretch(2, 1)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 8, 0)
+        self._layout.setSpacing(7)
 
-        self._left_group = QWidget(self)
-        left = QHBoxLayout(self._left_group)
-        self._left_layout = left
-        left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(9)
-        self.logo = LogoGlyph(36, self._left_group)
-        left.addWidget(self.logo)
-        self.title = QLabel(APP_NAME, self._left_group)
-        self.title.setObjectName("appTitle")
-        set_heading_capitalization(self.title)
-        left.addWidget(self.title)
+        self.logo_plaque = TitlebarMascotPlaque(self)
+        # Совместимое имя для внешних probe-скриптов; текста бренда в панели нет.
+        self.logo = self.logo_plaque
+        self._layout.addWidget(self.logo_plaque)
+
         self.camera_list_button = HeaderActionButton(
             "Список камер",
             "list",
             primary=False,
             outer_side="both",
-            parent=self._left_group,
+            parent=self,
         )
         self.camera_list_button.setObjectName("cameraListButton")
         self.camera_list_button.setToolTip("Список камер")
         self.camera_list_button.clicked.connect(self.camera_list_clicked)
-        left.addWidget(self.camera_list_button)
         self._layout.addWidget(
-            self._left_group,
-            0,
-            0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self.camera_list_button,
+            1,
+            Qt.AlignmentFlag.AlignVCenter,
         )
 
-        self._layout_cluster = QWidget(self)
-        cluster = QHBoxLayout(self._layout_cluster)
-        cluster.setContentsMargins(0, 0, 0, 0)
-        cluster.setSpacing(9)
-
-        self.shuher_button = ShuherButton(self._layout_cluster)
+        self.shuher_button = ShuherButton(self)
         self.shuher_button.setObjectName("shuherButton")
         self.shuher_button.setToolTip("Открыть журнал сработок")
         self.shuher_button.clicked.connect(self.shuher_clicked)
-        cluster.addWidget(self.shuher_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._layout.addWidget(
+            self.shuher_button,
+            1,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
 
-        self.center_block = _TitleBarCenterBlock(self._layout_cluster)
-        center = QVBoxLayout(self.center_block)
-        center.setContentsMargins(0, 3, 0, 3)
-        center.setSpacing(1)
-
-        self.camera_count = QLabel(self)
-        self.camera_count.setObjectName("cameraCount")
-        self.camera_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        center.addWidget(self.camera_count, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self.layout_control = SegmentedControl(
-            ("", ""),
-            ("free", "grid"),
+        self.layout_button = LayoutMenuButton(
             layout_mode,
             self,
-            icons=("free", "grid"),
-            segment_tooltips=("Свободная раскладка", "Раскладка сеткой"),
         )
-        self.layout_control.value_changed.connect(self.layout_mode_changed)
-        center.addWidget(self.layout_control, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.center_block.setFixedWidth(self.layout_control.sizeHint().width())
-        cluster.addWidget(self.center_block, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.layout_button.setObjectName("layoutMenuButton")
+        self.layout_button.value_changed.connect(self.layout_mode_changed)
+        self.layout_menu = self.layout_button.menu
         self._layout.addWidget(
-            self._layout_cluster,
-            0,
+            self.layout_button,
             1,
-            Qt.AlignmentFlag.AlignCenter,
+            Qt.AlignmentFlag.AlignVCenter,
         )
-
-        self._right_group = QWidget(self)
-        right = QHBoxLayout(self._right_group)
-        self._right_layout = right
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(3)
-
-        self._action_pair = QWidget(self._right_group)
-        pair = QHBoxLayout(self._action_pair)
-        pair.setContentsMargins(0, 0, 0, 0)
-        pair.setSpacing(0)
 
         self.find_button = HeaderActionButton(
             "Найти камеры",
             "search",
             primary=False,
-            outer_side="left",
-            parent=self._action_pair,
+            outer_side="both",
+            parent=self,
         )
         self.find_button.setObjectName("findCameraButton")
         self.find_button.setToolTip("Найти камеры")
         self.find_button.clicked.connect(self.find_cameras_clicked)
-        pair.addWidget(self.find_button)
+        self._layout.addWidget(
+            self.find_button,
+            1,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
 
         self.add_button = HeaderActionButton(
             "Добавить камеру",
             "add",
             primary=True,
-            outer_side="right",
-            parent=self._action_pair,
+            outer_side="both",
+            parent=self,
         )
         self.add_button.setObjectName("addCameraButton")
         self.add_button.setToolTip("Добавить камеру")
         self.add_button.clicked.connect(self.add_camera_clicked)
-        pair.addWidget(self.add_button)
-        right.addWidget(self._action_pair)
+        self._layout.addWidget(
+            self.add_button,
+            1,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        # В компактном режиме остаток ширины остаётся перед служебными кнопками,
+        # поэтому системный блок всегда прижат к правому краю.
+        self._layout.addStretch(0)
 
         self.settings_button = ToolIconButton(
             "settings",
             "Настройки доски",
             self,
+            ribbon=True,
         )
         self.fullscreen_button = ToolIconButton(
             "fullscreen",
             "Полный экран · F11",
             self,
+            ribbon=True,
         )
-        self.minimize_button = ToolIconButton("minimize", "Свернуть", self)
-        self.close_button = ToolIconButton("close", "Закрыть", self)
+        self.minimize_button = ToolIconButton(
+            "minimize",
+            "Свернуть",
+            self,
+            ribbon=True,
+        )
+        self.close_button = ToolIconButton(
+            "close",
+            "Закрыть",
+            self,
+            ribbon=True,
+        )
         for button in (
             self.settings_button,
             self.fullscreen_button,
             self.minimize_button,
             self.close_button,
         ):
-            right.addWidget(button)
-
-        self._layout.addWidget(
-            self._right_group,
-            0,
-            2,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-        )
+            self._layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.settings_button.clicked.connect(self.settings_clicked)
         self.fullscreen_button.clicked.connect(self.fullscreen_clicked)
         self.minimize_button.clicked.connect(self.minimize_clicked)
         self.close_button.clicked.connect(self.close_clicked)
+        for button in (
+            self.camera_list_button,
+            self.shuher_button,
+            self.layout_button,
+            self.find_button,
+            self.add_button,
+        ):
+            # Системный focus-chain при старте иначе подсвечивает только первую
+            # кнопку и разрушает ровный ритм ленты; все действия доступны мышью.
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.set_camera_count(0)
         self._sync_action_buttons()
-        self._sync_side_columns()
+        self._apply_ribbon_mode()
 
     @staticmethod
     def _camera_word(count: int) -> str:
@@ -257,43 +219,73 @@ class BoardTitleBar(QWidget):
 
     def set_camera_count(self, count: int, total: int | None = None) -> None:
         if total is not None and total > count:
-            self.camera_count.setText(
-                f"{count} из {total} {self._camera_word_genitive(total)}"
+            summary = f"{count} из {total} {self._camera_word_genitive(total)}"
+            compact_summary = f"{count}/{total}"
+        else:
+            summary = f"{count} {self._camera_word(count)}"
+            compact_summary = str(count)
+        self.layout_button.set_camera_summary(summary, compact_summary)
+        if self._compact:
+            self._set_fixed_width(
+                self.layout_button,
+                self.layout_button.sizeHint().width(),
             )
-            return
-        self.camera_count.setText(f"{count} {self._camera_word(count)}")
 
     def set_compact(self, compact: bool) -> None:
         if compact == self._compact:
             return
         self._compact = compact
-        if compact:
-            self.title.hide()
-            self._right_layout.removeWidget(self._action_pair)
-            self._left_layout.addWidget(self._action_pair)
+        self._apply_ribbon_mode()
+
+    @classmethod
+    def _set_expanding_width(cls, widget: QWidget, minimum: int) -> None:
+        widget.setMinimumWidth(minimum)
+        widget.setMaximumWidth(cls._MAX_WIDGET_SIZE)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    @staticmethod
+    def _set_fixed_width(widget: QWidget, width: int) -> None:
+        widget.setMinimumWidth(width)
+        widget.setMaximumWidth(width)
+        widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def _apply_ribbon_mode(self) -> None:
+        self.logo_plaque.set_compact(self._compact)
+        self.layout_button.set_condensed(self._compact)
+        if self._compact:
+            for button in (
+                self.camera_list_button,
+                self.find_button,
+                self.add_button,
+            ):
+                button.set_compact(True)
+                self._set_fixed_width(button, button.sizeHint().width())
+            self.shuher_button.set_compact(False)
+            self._set_fixed_width(
+                self.shuher_button,
+                self.shuher_button.sizeHint().width(),
+            )
+            self._set_fixed_width(
+                self.layout_button,
+                self.layout_button.sizeHint().width(),
+            )
         else:
-            self._left_layout.removeWidget(self._action_pair)
-            self._right_layout.insertWidget(0, self._action_pair)
-            self.title.show()
-        tool_size = 30 if compact else 34
-        for button in (
-            self.settings_button,
-            self.fullscreen_button,
-            self.minimize_button,
-            self.close_button,
-        ):
-            button.setFixedSize(tool_size, tool_size)
-        for button in (
-            self.camera_list_button,
-            self.find_button,
-            self.add_button,
-        ):
-            button.set_compact(compact)
-        self._sync_action_buttons()
-        self._sync_side_columns()
+            for button in (
+                self.camera_list_button,
+                self.find_button,
+                self.add_button,
+            ):
+                button.set_compact(False)
+            self.shuher_button.set_compact(False)
+            self._set_expanding_width(self.camera_list_button, 138)
+            self._set_expanding_width(self.shuher_button, 126)
+            self._set_expanding_width(self.layout_button, 126)
+            self._set_expanding_width(self.find_button, 142)
+            self._set_expanding_width(self.add_button, 160)
+        self._layout.invalidate()
 
     def set_layout_mode(self, mode: str, *, animate: bool = True) -> None:
-        self.layout_control.set_value(mode, animate=animate)
+        self.layout_button.set_value(mode, animate=animate)
 
     def set_fullscreen_mode(self, fullscreen: bool) -> None:
         if fullscreen == self._fullscreen:
@@ -315,16 +307,56 @@ class BoardTitleBar(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         del event
-        if not self._overlay_backing:
-            return
         painter = QPainter(self)
-        backing = QColor(BACKGROUND)
-        backing.setAlpha(230)
-        painter.fillRect(self.rect(), backing)
-        line = QColor(BRONZE)
-        line.setAlpha(70)
-        painter.setPen(QPen(line, 1))
-        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        if self._overlay_backing:
+            backing = QColor(BACKGROUND)
+            backing.setAlpha(238)
+            painter.fillRect(self.rect(), backing)
+            line = QColor(BRONZE)
+            line.setAlpha(70)
+            painter.setPen(QPen(line, 1))
+            painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center = QPointF(self.width() / 2.0, self.height() - 7.0)
+        wing = QColor("#C0322B")
+        wing.setAlpha(145)
+        painter.setPen(
+            QPen(
+                wing,
+                1.0,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
+        for side in (-1.0, 1.0):
+            painter.drawLine(
+                QPointF(center.x() + side * 8.0, center.y()),
+                QPointF(center.x() + side * 24.0, center.y()),
+            )
+            painter.drawLine(
+                QPointF(center.x() + side * 10.0, center.y() + 2.4),
+                QPointF(center.x() + side * 20.0, center.y() + 2.4),
+            )
+
+        star = QPainterPath()
+        outer_radius = 7.0
+        inner_radius = 2.9
+        for index in range(10):
+            angle = -math.pi / 2.0 + index * math.pi / 5.0
+            radius = outer_radius if index % 2 == 0 else inner_radius
+            point = QPointF(
+                center.x() + math.cos(angle) * radius,
+                center.y() + math.sin(angle) * radius,
+            )
+            if index == 0:
+                star.moveTo(point)
+            else:
+                star.lineTo(point)
+        star.closeSubpath()
+        painter.setPen(QPen(QColor("#7B1D1A"), 0.8))
+        painter.setBrush(QColor("#C0322B"))
+        painter.drawPath(star)
 
     def set_discovery_busy(self, busy: bool) -> None:
         self._discovery_busy = busy
@@ -343,9 +375,12 @@ class BoardTitleBar(QWidget):
         )
         self.shuher_button.set_alert_active(count > 0)
         self.shuher_button.updateGeometry()
-        self._layout_cluster.updateGeometry()
         self._layout.invalidate()
-        self._sync_side_columns()
+        if self._compact:
+            self._set_fixed_width(
+                self.shuher_button,
+                self.shuher_button.sizeHint().width(),
+            )
 
     def _sync_action_buttons(self) -> None:
         if self._discovery_busy:
@@ -355,24 +390,6 @@ class BoardTitleBar(QWidget):
             self.find_button.setText("Найти камеры")
             self.find_button.setToolTip("Найти камеры")
         self.add_button.setText("Добавить камеру")
-
-    def _sync_side_columns(self) -> None:
-        self._left_group.ensurePolished()
-        self._right_group.ensurePolished()
-        self._layout_cluster.ensurePolished()
-        self._left_group.layout().activate()
-        self._right_group.layout().activate()
-        self._layout_cluster.layout().activate()
-        side_width = max(
-            self._left_group.sizeHint().width(),
-            self._right_group.sizeHint().width(),
-        )
-        self._layout.setColumnMinimumWidth(0, side_width)
-        self._layout.setColumnMinimumWidth(2, side_width)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._sync_side_columns()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

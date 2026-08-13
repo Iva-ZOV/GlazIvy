@@ -12,6 +12,7 @@ from PySide6.QtCore import (
     QEvent,
     Property,
     QEasingCurve,
+    QPoint,
     QPointF,
     QRectF,
     QSize,
@@ -21,6 +22,8 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
     QColor,
     QFont,
     QFontMetricsF,
@@ -39,6 +42,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QSlider,
     QSizePolicy,
     QSpacerItem,
@@ -61,6 +65,7 @@ from .theme import (
     PRIMARY_PRESSED,
     SUCCESS,
     SURFACE,
+    SURFACE_RAISED,
     TEXT,
     TEXT_MUTED,
     WARNING,
@@ -219,6 +224,7 @@ _grain_cache: dict[int, QPixmap] = {}
 _mascot_sources: dict[str, Image.Image | None] = {}
 _mascot_cache: dict[tuple[str, int, int, int], QPixmap] = {}
 _shuher_icon_cache: tuple[QPixmap | None, tuple[QPixmap, ...]] | None = None
+_titlebar_watch_source: QPixmap | None = None
 _MASCOT_FILES = {
     "calm": "mascot_calm.png",
     "list": "mascot_list.png",
@@ -360,6 +366,28 @@ def _shuher_icon_frames() -> tuple[QPixmap | None, tuple[QPixmap, ...]]:
     return _shuher_icon_cache
 
 
+def _titlebar_watch_pixmap() -> QPixmap | None:
+    """Загружает отдельный @2x-кроп логотипа только из PNG-байтов."""
+
+    global _titlebar_watch_source
+    if _titlebar_watch_source is not None:
+        return _titlebar_watch_source if not _titlebar_watch_source.isNull() else None
+    pixmap = QPixmap()
+    try:
+        loaded = pixmap.loadFromData(
+            resource_path("assets", "titlebar_watch.png").read_bytes(),
+            "PNG",
+        )
+    except OSError:
+        loaded = False
+    if not loaded or pixmap.isNull():
+        _titlebar_watch_source = QPixmap()
+        return None
+    pixmap.setDevicePixelRatio(2.0)
+    _titlebar_watch_source = pixmap
+    return pixmap
+
+
 def _grain_pixmap(dpr: float) -> QPixmap | None:
     global _grain_source
     if _grain_source is None:
@@ -458,6 +486,105 @@ class LogoGlyph(QWidget):
         )
 
 
+class TitlebarMascotPlaque(QWidget):
+    """Декоративный логотип-плашка, за который можно двигать окно."""
+
+    WIDE_WIDTH = 82
+    COMPACT_WIDTH = 72
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._compact = False
+        self._hover = 0.0
+        self.setFixedWidth(self.WIDE_WIDTH)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.setToolTip("Глаз Ивы")
+        self._animation = QVariantAnimation(self)
+        self._animation.setDuration(150)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._set_hover)
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.COMPACT_WIDTH if self._compact else self.WIDE_WIDTH, 70)
+
+    def set_compact(self, compact: bool) -> None:
+        compact = bool(compact)
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self.setFixedWidth(self.COMPACT_WIDTH if compact else self.WIDE_WIDTH)
+        self.updateGeometry()
+
+    def _set_hover(self, value: object) -> None:
+        self._hover = float(value)
+        self.update()
+
+    def _animate_to(self, end: float) -> None:
+        self._animation.stop()
+        self._animation.setStartValue(self._hover)
+        self._animation.setEndValue(end)
+        self._animation.start()
+
+    def enterEvent(self, event: object) -> None:
+        self._animate_to(1.0)
+        super().enterEvent(event)  # type: ignore[arg-type]
+
+    def leaveEvent(self, event: object) -> None:
+        self._animate_to(0.0)
+        super().leaveEvent(event)  # type: ignore[arg-type]
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        background = _blend_color(PRIMARY_PRESSED, PRIMARY, self._hover * 0.26)
+        painter.fillRect(self.rect(), background)
+
+        edge = _color(TEXT, int(18 + 18 * self._hover))
+        painter.setPen(QPen(edge, 1))
+        painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+
+        pixmap = _titlebar_watch_pixmap()
+        if pixmap is None:
+            pixmap = _mascot_pixmap(
+                "watch",
+                QSize(max(1, self.width() - 10), max(1, self.height() - 6)),
+                self.devicePixelRatioF(),
+            )
+        if pixmap is None or pixmap.isNull():
+            return
+        logical = pixmap.deviceIndependentSize()
+        scale = min(
+            (self.width() - 8.0) / max(1.0, logical.width()),
+            (self.height() - 4.0) / max(1.0, logical.height()),
+            1.0,
+        )
+        target = QRectF(0, 0, logical.width() * scale, logical.height() * scale)
+        target.moveCenter(QRectF(self.rect()).center() + QPointF(0, 1))
+        source = QRectF(pixmap.rect())
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        painter.drawPixmap(target, pixmap, source)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            handle = window.windowHandle()
+            if handle is not None and not window.isFullScreen():
+                handle.startSystemMove()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            toggle = getattr(self.window(), "toggle_maximized", None)
+            if callable(toggle):
+                toggle()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 class _VolumeSlider(QSlider):
     """Слайдер явно принимает мышь и не отдаёт нажатие drag-родителю."""
 
@@ -528,11 +655,15 @@ class ToolIconButton(QAbstractButton):
         kind: str,
         tooltip: str,
         parent: QWidget | None = None,
+        *,
+        ribbon: bool = False,
     ) -> None:
         super().__init__(parent)
         self.kind = kind
+        self._ribbon = ribbon
         self.setToolTip(tooltip)
-        self.setFixedSize(34, 34)
+        button_size = 42 if ribbon else 34
+        self.setFixedSize(button_size, button_size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._hover = 0.0
@@ -542,7 +673,8 @@ class ToolIconButton(QAbstractButton):
         self._animation.valueChanged.connect(self._set_hover)
 
     def sizeHint(self) -> QSize:
-        return QSize(34, 34)
+        size = 42 if self._ribbon else 34
+        return QSize(size, size)
 
     def set_kind(self, kind: str, tooltip: str | None = None) -> None:
         if kind != self.kind:
@@ -569,13 +701,18 @@ class ToolIconButton(QAbstractButton):
         self._animate_to(0.0)
         super().leaveEvent(event)  # type: ignore[arg-type]
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+
     def paintEvent(self, event: QPaintEvent) -> None:
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         if not self.isEnabled():
-            background = _color(BRONZE, 5)
+            background = _color(SURFACE_RAISED, 70 if self._ribbon else 5)
         elif self.kind == "close":
             background = _color(PRIMARY, int(8 + 50 * self._hover))
             if self.isDown():
@@ -585,12 +722,31 @@ class ToolIconButton(QAbstractButton):
             if self.isDown():
                 background = _color(KHAKI, 92)
         else:
-            background = _color(BRONZE, int(5 + 24 * self._hover))
+            background = (
+                _blend_color(SURFACE_RAISED, BRONZE, 0.08 + self._hover * 0.10)
+                if self._ribbon
+                else _color(BRONZE, int(5 + 24 * self._hover))
+            )
             if self.isDown():
-                background = _color(BRONZE, 42)
-        painter.setPen(Qt.PenStyle.NoPen)
+                background = (
+                    _blend_color(SURFACE_RAISED, BRONZE, 0.24)
+                    if self._ribbon
+                    else _color(BRONZE, 42)
+                )
+        if self._ribbon:
+            border = _color(BRONZE, int(76 + 44 * self._hover))
+            if self.kind == "close" and self._hover > 0.01:
+                border = _color(PRIMARY, 190)
+            painter.setPen(QPen(border, 1))
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(background)
-        painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 3, 3)
+        inset = 0.5 if self._ribbon else 2.0
+        painter.drawRoundedRect(
+            QRectF(self.rect()).adjusted(inset, inset, -inset, -inset),
+            3,
+            3,
+        )
 
         glyph = (
             _color(BRONZE, 74)
@@ -679,24 +835,32 @@ class HeaderActionButton(QAbstractButton):
         *,
         primary: bool,
         outer_side: str,
+        menu_indicator: bool = False,
+        uppercase: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        if kind not in {"search", "add", "list", "shuher"}:
+        if kind not in {"search", "add", "list", "shuher", "layout"}:
             raise ValueError("Неизвестная иконка кнопки панели")
         if outer_side not in {"left", "middle", "right", "both"}:
             raise ValueError("outer_side должен быть left, middle, right или both")
         self.kind = kind
         self.primary = primary
         self.outer_side = outer_side
+        self._menu_indicator = menu_indicator
+        self._uppercase = uppercase
         self._compact = False
         self._hover = 0.0
         self.setText(text)
-        self.setFixedHeight(36)
+        self.setFixedHeight(42)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         font = QFont(self.font())
-        font.setCapitalization(QFont.Capitalization.AllUppercase)
+        font.setCapitalization(
+            QFont.Capitalization.AllUppercase
+            if uppercase
+            else QFont.Capitalization.MixedCase
+        )
         self.setFont(font)
         self._animation = QVariantAnimation(self)
         self._animation.setDuration(140)
@@ -705,12 +869,14 @@ class HeaderActionButton(QAbstractButton):
 
     def sizeHint(self) -> QSize:
         if self._compact:
-            return QSize(42, 36)
+            return QSize(42, 42)
+        indicator_width = 14 if self._menu_indicator else 0
         return QSize(
             self.fontMetrics().horizontalAdvance(self.text())
             + self._content_icon_size().width()
-            + 35,
-            36,
+            + 35
+            + indicator_width,
+            42,
         )
 
     def _content_icon_size(self) -> QSize:
@@ -750,6 +916,11 @@ class HeaderActionButton(QAbstractButton):
         self._animate_to(0.0)
         super().leaveEvent(event)  # type: ignore[arg-type]
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+
     def paintEvent(self, event: QPaintEvent) -> None:
         del event
         painter = QPainter(self)
@@ -779,10 +950,14 @@ class HeaderActionButton(QAbstractButton):
             border = _color(TEXT, int(24 + 28 * self._hover))
             glyph = _color(TEXT, 250)
         else:
-            background = _color(BRONZE, int(5 + 22 * self._hover))
+            background = _blend_color(
+                SURFACE_RAISED,
+                BRONZE,
+                0.055 + self._hover * 0.11,
+            )
             if self.isDown():
-                background = _color(BRONZE, 38)
-            border = _color(BRONZE, int(145 + 45 * self._hover))
+                background = _blend_color(SURFACE_RAISED, BRONZE, 0.22)
+            border = _color(BRONZE, int(92 + 52 * self._hover))
             glyph = _blend_color(BRONZE, TEXT, self._hover)
 
         painter.setPen(QPen(border, 1))
@@ -792,7 +967,11 @@ class HeaderActionButton(QAbstractButton):
         font = QFont(self.font())
         font.setPixelSize(11 if self._compact else 12)
         font.setWeight(QFont.Weight.Bold if self.primary else QFont.Weight.DemiBold)
-        font.setCapitalization(QFont.Capitalization.AllUppercase)
+        font.setCapitalization(
+            QFont.Capitalization.AllUppercase
+            if self._uppercase
+            else QFont.Capitalization.MixedCase
+        )
         painter.setFont(font)
         icon_size = self._content_icon_size()
         if self._compact:
@@ -804,7 +983,8 @@ class HeaderActionButton(QAbstractButton):
             )
         else:
             text_width = painter.fontMetrics().horizontalAdvance(self.text())
-            content_width = icon_size.width() + 8 + text_width
+            indicator_width = 14 if self._menu_indicator else 0
+            content_width = icon_size.width() + 8 + text_width + indicator_width
             content_left = (self.width() - content_width) / 2
             icon_rect = QRectF(
                 content_left,
@@ -823,6 +1003,26 @@ class HeaderActionButton(QAbstractButton):
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 self.text(),
             )
+            if self._menu_indicator:
+                chevron_x = content_left + icon_size.width() + 8 + text_width + 8
+                chevron_y = self.height() / 2 + 0.5
+                painter.setPen(
+                    QPen(
+                        glyph,
+                        1.35,
+                        Qt.PenStyle.SolidLine,
+                        Qt.PenCapStyle.RoundCap,
+                        Qt.PenJoinStyle.RoundJoin,
+                    )
+                )
+                painter.drawLine(
+                    QPointF(chevron_x - 3.0, chevron_y - 1.5),
+                    QPointF(chevron_x, chevron_y + 1.5),
+                )
+                painter.drawLine(
+                    QPointF(chevron_x, chevron_y + 1.5),
+                    QPointF(chevron_x + 3.0, chevron_y - 1.5),
+                )
         self._draw_content_icon(painter, icon_rect, glyph)
 
         if self.hasFocus():
@@ -836,6 +1036,103 @@ class HeaderActionButton(QAbstractButton):
                     round_right=self.outer_side in {"right", "both"},
                 )
             )
+
+
+class LayoutMenuButton(HeaderActionButton):
+    """Счётчик камер и переключатель раскладки в одной ribbon-кнопке."""
+
+    value_changed = Signal(str)
+
+    def __init__(
+        self,
+        value: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(
+            "0 камер",
+            "layout",
+            primary=False,
+            outer_side="both",
+            menu_indicator=True,
+            uppercase=False,
+            parent=parent,
+        )
+        self._value = value if value in {"free", "grid"} else "free"
+        self._summary = "0 камер"
+        self._compact_summary = "0"
+        self._condensed = False
+        self.setToolTip("Выбрать раскладку камер")
+
+        self.menu = QMenu(self)
+        self.menu.setObjectName("layoutMenu")
+        self.menu.setMinimumWidth(232)
+        self._action_group = QActionGroup(self)
+        self._action_group.setExclusive(True)
+        self._actions: dict[str, QAction] = {}
+        for mode, text in (
+            ("free", "Свободная раскладка"),
+            ("grid", "Сетка"),
+        ):
+            action = QAction(text, self)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda checked=False, selected=mode: self._select_from_menu(selected)
+            )
+            self._action_group.addAction(action)
+            self.menu.addAction(action)
+            self._actions[mode] = action
+        self.clicked.connect(lambda checked=False: self.show_menu())
+        self.set_value(self._value, animate=False)
+
+    def _draw_content_icon(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        color: QColor,
+    ) -> None:
+        _draw_layout_icon(painter, self._value, rect, color)
+
+    def value(self) -> str:
+        return self._value
+
+    def set_value(
+        self,
+        value: str,
+        *,
+        emit: bool = False,
+        animate: bool = True,
+    ) -> None:
+        del animate
+        if value not in self._actions:
+            return
+        changed = value != self._value
+        self._value = value
+        for mode, action in self._actions.items():
+            action.setChecked(mode == value)
+        self.update()
+        if changed and emit:
+            self.value_changed.emit(value)
+
+    def set_camera_summary(self, summary: str, compact_summary: str) -> None:
+        self._summary = summary
+        self._compact_summary = compact_summary
+        self.setText(compact_summary if self._condensed else summary)
+        self.updateGeometry()
+
+    def set_condensed(self, condensed: bool) -> None:
+        condensed = bool(condensed)
+        if condensed == self._condensed:
+            return
+        self._condensed = condensed
+        self.setText(self._compact_summary if condensed else self._summary)
+        self.updateGeometry()
+        self.update()
+
+    def show_menu(self) -> None:
+        self.menu.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
+
+    def _select_from_menu(self, value: str) -> None:
+        self.set_value(value, emit=True, animate=False)
 
 
 class ShuherButton(HeaderActionButton):

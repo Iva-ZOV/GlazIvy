@@ -11,10 +11,8 @@ from urllib.parse import urlsplit
 
 from PySide6.QtCore import (
     QEvent,
-    QEasingCurve,
     QObject,
     QPoint,
-    QPropertyAnimation,
     QRectF,
     QTimer,
     Qt,
@@ -33,7 +31,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QGraphicsOpacityEffect,
     QMessageBox,
     QVBoxLayout,
     QWidget,
@@ -104,7 +101,7 @@ class MainWindow(QWidget):
     RESIZE_MARGIN = 11
     WINDOW_MARGIN = 18
     TITLE_BAR_COMPACT_WIDTH = 1240
-    FULLSCREEN_PANEL_HEIGHT = 62
+    FULLSCREEN_PANEL_HEIGHT = BoardTitleBar.HEIGHT
     # Панель всплывает только от самой кромки экрана: полоса во всю высоту
     # панели накрывала бы шапки верхних плиток и развёрнутой камеры.
     FULLSCREEN_PANEL_TRIGGER_HEIGHT = 4
@@ -189,19 +186,6 @@ class MainWindow(QWidget):
 
         self._title_bar_overlay = False
         self._title_bar_target_visible = True
-        self._title_bar_effect = QGraphicsOpacityEffect(self.title_bar)
-        self._title_bar_effect.setOpacity(1.0)
-        self.title_bar.setGraphicsEffect(self._title_bar_effect)
-        self._title_bar_animation = QPropertyAnimation(
-            self._title_bar_effect,
-            b"opacity",
-            self,
-        )
-        self._title_bar_animation.setDuration(180)
-        self._title_bar_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._title_bar_animation.finished.connect(
-            self._title_bar_animation_finished
-        )
 
         self._title_bar_idle_timer = QTimer(self)
         self._title_bar_idle_timer.setSingleShot(True)
@@ -1066,52 +1050,16 @@ class MainWindow(QWidget):
         *,
         animate: bool = True,
     ) -> None:
-        if visible == self._title_bar_target_visible:
-            if not animate:
-                self._title_bar_animation.stop()
-                self._title_bar_effect.setOpacity(1.0 if visible else 0.0)
-                self._title_bar_animation_finished()
-                return
-            if visible:
-                self.title_bar.setEnabled(True)
-                self.title_bar.show()
-                self.title_bar.raise_()
-                self._raise_night_overlay()
-            return
-
+        # Никаких QGraphicsEffect над деревом с видео: по истечении таймера
+        # оверлей переключается целиком, оставаясь кликабельным только видимым.
+        del animate
         self._title_bar_target_visible = visible
-        self._title_bar_animation.stop()
-        target_opacity = 1.0 if visible else 0.0
         if visible:
             self.title_bar.setEnabled(True)
             self.title_bar.show()
             self.title_bar.raise_()
             self._raise_night_overlay()
-        elif self.title_bar.isVisible():
-            self.title_bar.raise_()
-            self._raise_night_overlay()
-
-        if (
-            not animate
-            or abs(self._title_bar_effect.opacity() - target_opacity) < 0.01
-        ):
-            self._title_bar_effect.setOpacity(target_opacity)
-            self._title_bar_animation_finished()
             return
-
-        self._title_bar_animation.setStartValue(self._title_bar_effect.opacity())
-        self._title_bar_animation.setEndValue(target_opacity)
-        self._title_bar_animation.start()
-
-    def _title_bar_animation_finished(self) -> None:
-        if self._title_bar_target_visible:
-            self._title_bar_effect.setOpacity(1.0)
-            self.title_bar.setEnabled(True)
-            self.title_bar.show()
-            self.title_bar.raise_()
-            self._raise_night_overlay()
-            return
-        self._title_bar_effect.setOpacity(0.0)
         self.title_bar.setEnabled(False)
         self.title_bar.hide()
 
@@ -1170,7 +1118,6 @@ class MainWindow(QWidget):
             return
         self._fullscreen_pointer_timer.stop()
         self._title_bar_idle_timer.stop()
-        self._title_bar_animation.stop()
         self._set_fullscreen_title_bar_visible(True, animate=False)
         self.surface_layout.insertWidget(0, self.title_bar)
         self.title_bar.set_overlay_backing(False)
@@ -1327,7 +1274,6 @@ class MainWindow(QWidget):
             return
         self._fullscreen_pointer_timer.stop()
         self._title_bar_idle_timer.stop()
-        self._title_bar_animation.stop()
         self.night_mode_controller.shutdown()
         needs_save = self._config_dirty or self._save_timer.isActive()
         self._save_timer.stop()

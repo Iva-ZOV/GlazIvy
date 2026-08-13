@@ -509,4 +509,52 @@ def stylesheet(font_family: str, heading_font_family: str | None = None) -> str:
         border-radius: 3px;
         padding: 6px 8px;
     }}
+
+    QMenu {{
+        color: {TEXT};
+        background-color: {SURFACE};
+        border: 1px solid rgba(184, 155, 106, 118);
+        border-radius: 3px;
+        padding: 6px;
+    }}
+
+    QMenu::item {{
+        min-height: 24px;
+        padding: 7px 24px 7px 28px;
+        margin: 1px 0;
+        color: {TEXT_MUTED};
+        background-color: transparent;
+        border: 1px solid transparent;
+        border-radius: 2px;
+    }}
+
+    QMenu::item:selected {{
+        color: {TEXT};
+        background-color: rgba(110, 122, 69, 52);
+        border-color: rgba(184, 155, 106, 65);
+    }}
+
+    QMenu::item:checked {{
+        color: {TEXT};
+    }}
+
+    QMenu::indicator {{
+        width: 11px;
+        height: 11px;
+        margin-left: 7px;
+        border: 1px solid rgba(184, 155, 106, 92);
+        border-radius: 2px;
+        background-color: {SURFACE_RAISED};
+    }}
+
+    QMenu::indicator:checked {{
+        background-color: {KHAKI};
+        border-color: {TEXT_MUTED};
+    }}
+
+    QMenu::separator {{
+        height: 1px;
+        margin: 5px 8px;
+        background-color: rgba(184, 155, 106, 45);
+    }}
     """
